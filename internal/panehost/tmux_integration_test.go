@@ -58,7 +58,7 @@ func openTestHost(t *testing.T, socket string, run Runner, provider, ctlLog stri
 				"PANEHOST_TEST_AGENT=" + shellescape.Quote(agentPane),
 				"PANEHOST_TEST_CMD=" + shellescape.Quote(provider),
 				"PANEHOST_TEST_CONTROL_LOG=" + shellescape.Quote(ctlLog),
-				"PANEHOST_TEST_PROBE_LOG=" + shellescape.Quote(ctlLog+".probe"),
+				"PANEHOST_TEST_PROBE_LOG=" + shellescape.Quote(probeLog(ctlLog)),
 				"exec", shellescape.Quote(exe),
 			}, " ")
 		},
@@ -70,6 +70,15 @@ func openTestHost(t *testing.T, socket string, run Runner, provider, ctlLog stri
 		t.Fatalf("Open reported an existing pane for a new command")
 	}
 	return hp
+}
+
+// probeLog is where the helper logs its probes: beside the control log, or
+// nowhere when the test keeps no control log.
+func probeLog(ctlLog string) string {
+	if ctlLog == "" {
+		return ""
+	}
+	return ctlLog + ".probe"
 }
 
 func display(t *testing.T, run Runner, target, format string) string {
