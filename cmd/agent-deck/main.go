@@ -3159,16 +3159,15 @@ func buildListJSON(profileName string, instances []*session.Instance, cachedStat
 		cached = cachedStatus[0]
 	}
 	type sessionJSON struct {
-		ID                string `json:"id"`
-		ParentSessionID   string `json:"parent_session_id,omitempty"`
-		ParentProjectPath string `json:"parent_project_path,omitempty"`
-		// ParentID and ParentTitle are always present ("" when none) so a
-		// pane can build the parent chain without guessing from titles.
-		ParentID          string    `json:"parent_id"`
-		ParentTitle       string    `json:"parent_title"`
+		ID                string    `json:"id"`
+		ParentSessionID   string    `json:"parent_session_id,omitempty"`
+		ParentProjectPath string    `json:"parent_project_path,omitempty"`
+		ParentID          string    `json:"parent_id"`    // always present, "" when none
+		ParentTitle       string    `json:"parent_title"` // always present, "" when none or not listed
 		Title             string    `json:"title"`
 		Path              string    `json:"path"`
 		Group             string    `json:"group"`
+		Item              string    `json:"item"` // tracker item ref (session set <id> item), "" when none
 		Tool              string    `json:"tool"`
 		Account           string    `json:"account"`
 		Command           string    `json:"command,omitempty"`
@@ -3248,6 +3247,7 @@ func buildListJSON(profileName string, instances []*session.Instance, cachedStat
 			Title:             inst.Title,
 			Path:              inst.ProjectPath,
 			Group:             inst.GroupPath,
+			Item:              inst.ItemRef(),
 			Tool:              inst.Tool,
 			Account:           inst.Account,
 			Command:           inst.Command,
@@ -3323,6 +3323,7 @@ func handleListAllProfiles(jsonOutput, includeSuperseded bool) {
 			Title             string    `json:"title"`
 			Path              string    `json:"path"`
 			Group             string    `json:"group"`
+			Item              string    `json:"item"`
 			Tool              string    `json:"tool"`
 			Account           string    `json:"account"`
 			Command           string    `json:"command,omitempty"`
@@ -3362,6 +3363,7 @@ func handleListAllProfiles(jsonOutput, includeSuperseded bool) {
 					Title:             inst.Title,
 					Path:              inst.ProjectPath,
 					Group:             inst.GroupPath,
+					Item:              inst.ItemRef(),
 					Tool:              inst.Tool,
 					Account:           inst.Account,
 					Command:           inst.Command,

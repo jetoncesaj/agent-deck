@@ -640,6 +640,17 @@ func (h *Home) renderForkingState(inst *session.Instance, width int, startTime t
 	return b.String()
 }
 
+// itemRefLine is the preview header's tracker-item line ("🔖 <ref>",
+// truncated to width cells), or "" when the session has no item.
+func itemRefLine(inst *session.Instance, width int) string {
+	item := inst.ItemRef()
+	if item == "" {
+		return ""
+	}
+	const prefix = "🔖 "
+	return prefix + cellTruncate(item, max(0, width-cellWidth(prefix)), "…")
+}
+
 // renderSessionInfoCard renders a simple session info card as fallback view
 // Used when both show_output and show_analytics are disabled
 func (h *Home) renderSessionInfoCard(inst *session.Instance, width, height int) string {
@@ -670,6 +681,12 @@ func (h *Home) renderSessionInfoCard(inst *session.Instance, width, height int) 
 
 	// Path
 	b.WriteString(fmt.Sprintf("%s %s\n", labelStyle.Render("Path:"), valueStyle.Render(inst.ProjectPath)))
+
+	// Tracker item (session set <id> item), when set
+	if item := inst.ItemRef(); item != "" {
+		item = cellTruncate(item, max(0, width-cellWidth("Item: ")), "…")
+		b.WriteString(fmt.Sprintf("%s %s\n", labelStyle.Render("Item:"), valueStyle.Render(item)))
+	}
 
 	// Status with color
 	var statusColor lipgloss.Color
@@ -935,6 +952,10 @@ func (h *Home) renderPreviewPane(width, height int) string {
 	pathStr := truncatePath(selected.ProjectPath, width-4)
 	b.WriteString(infoStyle.Render("📁 " + pathStr))
 	b.WriteString("\n")
+	if line := itemRefLine(selected, width-4); line != "" {
+		b.WriteString(infoStyle.Render(line))
+		b.WriteString("\n")
+	}
 
 	// Activity time - shows when session was last active. Composed with
 	// sessionActivityTime — the SAME formula as the row badge (issue #1846:

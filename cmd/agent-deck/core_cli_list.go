@@ -139,6 +139,7 @@ type allProfilesSessionJSON struct {
 	Title             string    `json:"title"`
 	Path              string    `json:"path"`
 	Group             string    `json:"group"`
+	Item              string    `json:"item"`
 	Tool              string    `json:"tool"`
 	Account           string    `json:"account"`
 	Command           string    `json:"command,omitempty"`
@@ -172,6 +173,7 @@ func renderListAllProfiles(listed core.SessionListOut, jsonOutput bool) {
 					Title:             row.Title,
 					Path:              row.Path,
 					Group:             row.Group,
+					Item:              row.Item,
 					Tool:              row.Tool,
 					Account:           row.Account,
 					Command:           row.Command,

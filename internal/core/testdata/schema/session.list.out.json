@@ -121,6 +121,10 @@
           "$ref": "#/$defs/session.IntendedSwitchJSON",
           "description": "intended account/model switch: the switch is intended while account and model equal it and now \u003c expires_at; absent when none or expired"
         },
+        "item": {
+          "description": "tracker item ref set by session set \u003cid\u003e item; empty when none",
+          "type": "string"
+        },
         "last_activity_at": {
           "description": "live",
           "type": "string"
@@ -216,6 +220,7 @@
         "created_at",
         "group",
         "id",
+        "item",
         "parent_id",
         "parent_title",
         "path",

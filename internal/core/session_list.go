@@ -53,6 +53,7 @@ type SessionRow struct {
 	Title             string         `json:"title"`
 	Path              string         `json:"path"`
 	Group             string         `json:"group"`
+	Item              string         `json:"item" doc:"tracker item ref set by session set <id> item; empty when none"`
 	Tool              string         `json:"tool"`
 	Account           string         `json:"account"`
 	Command           string         `json:"command,omitempty"`
@@ -151,6 +152,7 @@ func staticSessionRow(inst *session.Instance, instances []*session.Instance, pro
 		Title:             inst.Title,
 		Path:              inst.ProjectPath,
 		Group:             inst.GroupPath,
+		Item:              inst.ItemRef(),
 		Tool:              inst.Tool,
 		Account:           inst.Account,
 		Command:           inst.Command,

@@ -148,6 +148,7 @@ func handleSessionShow(profile string, args []string) {
 		"parent_project_path":  inst.ParentProjectPath,
 		"parent_id":            parentID,
 		"parent_title":         parentTitle,
+		"item":                 inst.ItemRef(),
 		"no_transition_notify": inst.NoTransitionNotify,
 		"title_locked":         inst.TitleLocked,
 		"tool":                 inst.Tool,
@@ -318,6 +319,9 @@ func handleSessionShow(profile string, args []string) {
 	if inst.GroupPath != "" {
 		sb.WriteString(fmt.Sprintf("Group:   %s\n", inst.GroupPath))
 	}
+	if item := inst.ItemRef(); item != "" {
+		sb.WriteString(fmt.Sprintf("Item:    %s\n", item))
+	}
 
 	sb.WriteString(fmt.Sprintf("Tool:    %s\n", inst.Tool))
 	sb.WriteString(fmt.Sprintf("Account: %s\n", strconv.Quote(inst.Account)))
@@ -468,6 +472,7 @@ func handleSessionSet(profile string, args []string) {
 		fmt.Println("  prompt-suggestions Claude prompt suggestions: children-off (off when the session has a parent), on, or off (empty clears; session > profile > [launch]); restart required")
 		fmt.Println("  order              0-based position in the group (see `session show --json` .order); clamps to the end")
 		fmt.Println("  intended-switch    Mark the CURRENT account+model as switched on purpose (value = reason; 24h); '' clears")
+		fmt.Println("  item               Tracker item this session works on: any tracker's ref, free text, one line ('' clears; item in list/show --json)")
 		fmt.Println()
 		fmt.Println("Intended switches:")
 		fmt.Println("  `account`/`model` with --intended \"<reason>\" record the switch as intended until --intended-for")
@@ -492,6 +497,8 @@ func handleSessionSet(profile string, args []string) {
 		fmt.Println("  agent-deck session set my-project account work --intended \"acme blocked\" --intended-for 48h")
 		fmt.Println("  agent-deck session set my-project model opus --intended \"Fable weekly cap\"")
 		fmt.Println("  agent-deck session set my-project intended-switch \"switched in the TUI\"")
+		fmt.Println("  agent-deck session set my-project item ONAZA-737")
+		fmt.Println("  agent-deck session set my-project item \"\"               # clear")
 	}
 
 	if err := parseCLIFlags(fs, normalizeArgs(fs, args)); err != nil {
@@ -656,6 +663,9 @@ func handleSessionSet(profile string, args []string) {
 	// report what was actually stored rather than the raw argument.
 	if field == session.FieldPath {
 		value = inst.ProjectPath
+	}
+	if field == session.FieldItem {
+		value = inst.ItemRef()
 	}
 	// Custom-tool conversation id: sticky MergeToolDataExtras preserves
 	// generic_session_id when a full Save omits the key. CLI does not always

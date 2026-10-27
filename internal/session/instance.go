@@ -567,6 +567,13 @@ type Instance struct {
 	// favourite, so the save writes an explicit false (favorite_persist.go).
 	favoriteCleared bool
 
+	// itemRef is the tracker item this session works on (`session set <id>
+	// item <ref>`; any tracker's ref, free text; "" when none). Read it with
+	// ItemRef(); guarded by mu. Persisted in the tool_data extras zone
+	// (item_ref.go). itemRefCleared makes the save write an explicit clear.
+	itemRef        string
+	itemRefCleared bool
+
 	// IsForkAwaitingStart signals that this instance was produced by a
 	// fork builder and must run a pre-built fork command verbatim on the
 	// first Start() (#745). Claude fork targets usually store that command

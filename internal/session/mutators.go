@@ -64,6 +64,11 @@ const (
 	// switched on purpose (value = reason) for DefaultIntendedSwitchTTL, for a
 	// switch made in the TUI. Empty clears. Live. See intended_switch.go.
 	FieldIntendedSwitch = "intended-switch"
+	// FieldItem links the session to a tracker item: any tracker's ref,
+	// free text (one line, at most MaxItemRefLen bytes). Empty clears. Live.
+	// A routing cache (`inbox post` delivers an item's events to the session
+	// whose item matches); the tracker holds the truth. See item_ref.go.
+	FieldItem = "item"
 )
 
 var ValidMutableFields = []string{
@@ -94,6 +99,7 @@ var ValidMutableFields = []string{
 	FieldPromptSuggestions,
 	FieldFavorite,
 	FieldIntendedSwitch,
+	FieldItem,
 }
 
 type FieldRestartPolicy int
@@ -559,6 +565,14 @@ func SetField(inst *Instance, field, value string, extraArgsTokens []string) (ol
 		} else {
 			inst.MarkIntendedSwitch(reason, DefaultIntendedSwitchTTL, time.Now())
 		}
+
+	case FieldItem:
+		oldValue = inst.ItemRef()
+		ref, rerr := NormalizeItemRef(value)
+		if rerr != nil {
+			return oldValue, nil, &MutationError{Field: field, Msg: "invalid item: " + rerr.Error()}
+		}
+		inst.SetItemRef(ref)
 
 	case FieldFavorite:
 		oldValue = strconv.FormatBool(inst.Favorite)
