@@ -212,6 +212,11 @@ func handleSessionShow(profile string, args []string) {
 	}
 	if session.IsClaudeCompatible(inst.Tool) {
 		jsonData["claude_session_id"] = inst.ClaudeSessionID
+		// The conversation the last hook rebind (a /clear, a compaction
+		// rollover) replaced; omitted when the session never rebound.
+		if inst.PreviousClaudeSessionID != "" {
+			jsonData["claude_previous_session_id"] = inst.PreviousClaudeSessionID
+		}
 		jsonData["can_restart"] = inst.CanRestart()
 
 		if mcps := mcpInfoForJSON(mcpInfo); mcps != nil {
@@ -342,6 +347,9 @@ func handleSessionShow(profile string, args []string) {
 			sb.WriteString(fmt.Sprintf("Claude:  session_id=%s (can fork: %s)\n", truncatedID, canForkStr))
 		} else {
 			sb.WriteString("Claude:  no session ID detected\n")
+		}
+		if inst.PreviousClaudeSessionID != "" {
+			sb.WriteString(fmt.Sprintf("         previous_session_id=%s\n", inst.PreviousClaudeSessionID))
 		}
 
 		if mcpInfo != nil && mcpInfo.HasAny() {

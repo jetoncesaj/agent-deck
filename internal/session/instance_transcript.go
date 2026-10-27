@@ -454,9 +454,12 @@ func (i *Instance) GetLastResponseFromOwnTranscript(peers []*Instance) (*Respons
 // Behavior for Claude:
 //  1. Try structured JSONL read via stored ClaudeSessionID.
 //  2. Refresh ID from tmux env and retry.
-//  3. If the currently bound ID already has a local transcript file, scan for a
-//     /clear rollover. A missing file is not ownership of a neighboring JSONL.
-//  4. Fallback to terminal parsing.
+//  3. Only when the session has NO bound ID: scan the project directory for
+//     the newest transcript. A session with a bound ID reads that transcript
+//     and nothing else; a /clear or compaction rollover rebinds it through
+//     the SessionStart hook (claude_rollover_marker.go), so the newest file
+//     in a shared project directory is never taken for its own.
+//  4. Fallback to terminal parsing (the session's own pane).
 //  5. If still unavailable, return an empty response (no error).
 //
 // Behavior for Gemini (mirrors Claude):
@@ -516,7 +519,17 @@ func (i *Instance) GetLastResponseBestEffort() (*ResponseOutput, error) {
 		// LastStartedAt is known, the existing per-candidate mtime filter
 		// alone is sufficient and rollover recovery must not be blocked by
 		// the bound id's own file having not appeared yet.
-		if !i.LastStartedAt.IsZero() || i.GetJSONLPath() != "" {
+		//
+		// Strict reads: a session that HAS a bound id never scans. Several
+		// sessions can share one project directory, so the newest transcript
+		// there can be a sibling's reply even inside the mtime window; the
+		// bound id's own transcript (or, failing that, the session's own
+		// pane) is the only answer. A /clear or compaction rollover moves the
+		// bound id itself via the SessionStart hook's rollover marker, so the
+		// scan is no longer needed to follow one. Without a bound id there is
+		// no own file for #2303's evidence, so only a known LastStartedAt
+		// (the per-candidate mtime filter) admits the scan.
+		if i.ClaudeSessionID == "" && !i.LastStartedAt.IsZero() {
 			if id, recovered := i.findLatestClaudeTranscriptOnDisk(); recovered != nil {
 				// #1815: this is an mtime-based disk scan — the same evidence
 				// class as the restart discovery prelude, and in a shared working

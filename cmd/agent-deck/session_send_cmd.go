@@ -1751,6 +1751,13 @@ func waitForCodexTurnOutput(inst *session.Instance, generation string, deadline 
 // transcript, so waiting on it would return another session's output.
 // Fail fast (same semantics as --stream's #1352 guard) instead of polling
 // a colliding transcript until the freshness timeout.
+//
+// A local Claude session is read exactly like `session output`: only the
+// transcript of its own bound claude_session_id
+// (GetLastResponseFromOwnTranscript), never the newest transcript in a
+// shared project directory and never pane text. A session whose own
+// transcript does not appear by the freshness deadline fails with that
+// error instead of answering with another session's reply.
 func waitForFreshOutput(inst *session.Instance, sentAt time.Time, peers []*session.Instance) (*session.ResponseOutput, error) {
 	// Pi's transcript lives in the tool's HOME. Legacy SSH/sandbox instances
 	// use terminal fallback, which does not provide timestamp evidence.
@@ -1784,12 +1791,19 @@ func waitForFreshOutput(inst *session.Instance, sentAt time.Time, peers []*sessi
 		threshold = sentAt.Truncate(time.Millisecond)
 	}
 
+	read := inst.GetLastResponseBestEffort
+	if session.IsClaudeCompatible(inst.Tool) && inst.TranscriptIsResolvableLocally() {
+		read = func() (*session.ResponseOutput, error) {
+			return inst.GetLastResponseFromOwnTranscript(peers)
+		}
+	}
+
 	deadline := time.Now().Add(timeout)
 	var lastResp *session.ResponseOutput
 	var lastErr error
 
 	for time.Now().Before(deadline) {
-		resp, err := inst.GetLastResponseBestEffort()
+		resp, err := read()
 		if err != nil {
 			lastErr = err
 			time.Sleep(pollInterval)

@@ -279,8 +279,10 @@ type Instance struct {
 	ClaudeSessionID  string    `json:"claude_session_id,omitempty"`
 	ClaudeDetectedAt time.Time `json:"claude_detected_at,omitempty"`
 	// PreviousClaudeSessionID is the conversation id a hook rebind replaced
-	// (for example the pre-/clear conversation) during this process. It is
-	// persisted only as tool_data.claude_previous_session_id; not reloaded.
+	// (for example the pre-/clear conversation). It is persisted only as
+	// tool_data.claude_previous_session_id (written by the rebind itself,
+	// never by a save) and reloaded for display (`session show`); it is
+	// never a source of conversation identity.
 	PreviousClaudeSessionID string `json:"-"`
 	// claudeSessionIDsFromDiskScan records every conversation id this
 	// instance ever obtained from an mtime-based DISK SCAN rather than from a

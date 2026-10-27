@@ -110,6 +110,10 @@ type InstanceData struct {
 	// Claude session (persisted for resume after app restart)
 	ClaudeSessionID  string    `json:"claude_session_id,omitempty"`
 	ClaudeDetectedAt time.Time `json:"claude_detected_at,omitempty"`
+	// ClaudePreviousSessionID mirrors tool_data.claude_previous_session_id:
+	// the conversation the last hook rebind replaced (claude_previous_session.go).
+	// Display only; never written by a save.
+	ClaudePreviousSessionID string `json:"claude_previous_session_id,omitempty"`
 	// #1815: true when ClaudeSessionID came from a disk scan and was never
 	// verified as this session's own. Persisted so the taint survives a
 	// process restart and the id can never launder itself into a resumable
@@ -1354,6 +1358,7 @@ func (s *Storage) LoadLite() ([]*InstanceData, []*GroupData, error) {
 			Pin:                       PinMode(r.Pin),
 			ClaudeSessionID:           claudeSID,
 			ClaudeDetectedAt:          claudeAt,
+			ClaudePreviousSessionID:   ReadClaudePreviousSessionIDFromToolData(r.ToolData),
 			GeminiSessionID:           geminiSID,
 			GeminiDetectedAt:          geminiAt,
 			GeminiYoloMode:            geminiYolo,
@@ -1501,6 +1506,7 @@ func (s *Storage) LoadWithGroupsSnapshot() ([]*Instance, []*GroupData, *statedb.
 			Pin:                       PinMode(r.Pin),
 			ClaudeSessionID:           claudeSID,
 			ClaudeDetectedAt:          claudeAt,
+			ClaudePreviousSessionID:   ReadClaudePreviousSessionIDFromToolData(r.ToolData),
 			GeminiSessionID:           geminiSID,
 			GeminiDetectedAt:          geminiAt,
 			GeminiYoloMode:            geminiYolo,
@@ -1828,6 +1834,7 @@ func (s *Storage) convertToInstances(data *StorageData) ([]*Instance, []*GroupDa
 			TmuxSocketName:               instData.TmuxSocketName,
 			ClaudeSessionID:              instData.ClaudeSessionID,
 			ClaudeDetectedAt:             instData.ClaudeDetectedAt,
+			PreviousClaudeSessionID:      instData.ClaudePreviousSessionID,
 			claudeSessionIDsFromDiskScan: restoreClaudeSessionVerification(instData.ClaudeSessionID, instData.ClaudeSessionIDUnverified),
 			GeminiSessionID:              instData.GeminiSessionID,
 			GeminiDetectedAt:             instData.GeminiDetectedAt,

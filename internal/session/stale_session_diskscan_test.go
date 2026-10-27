@@ -8,23 +8,19 @@ import (
 	"time"
 )
 
-// TestGetLastResponseBestEffort_RecoversFromStaleSessionIDViaDiskScan locks the
-// fix for the conductor "raw JSON in chat" leak.
+// TestGetLastResponseBestEffort_BoundStaleIDNeverAdoptsNewestTranscript locks
+// the strict-read contract for a session WITH a bound id.
 //
-// Repro: a conductor's Claude session rolls over (/clear or compaction starts a
-// NEW transcript), but the tmux env var CLAUDE_SESSION_ID — fixed at launch —
-// still points at the OLD, now-empty transcript. The stored ClaudeSessionID
-// matches that stale env value. getClaudeLastResponse then reads the empty file,
-// finds no assistant message, errors, and GetLastResponseBestEffort falls back
-// to raw tmux-pane parsing (which includes tool output like `list --json`).
-//
-// Without tmux available (as in this hermetic test), the old behavior returns an
-// empty response. The fix adds a disk-scan fallback — mirroring the Gemini
-// syncGeminiSessionFromDisk path — that locates the newest transcript on disk
-// carrying a real assistant message and returns its clean text.
-//
-// RED before the disk-scan fallback exists; GREEN after.
-func TestGetLastResponseBestEffort_RecoversFromStaleSessionIDViaDiskScan(t *testing.T) {
+// History: a conductor's Claude session rolled over (/clear or compaction
+// starts a NEW transcript) while the bound id stayed on the OLD, empty one, and
+// a disk-scan fallback recovered "the newest transcript on disk carrying a real
+// assistant message". In a project directory shared by several sessions that
+// newest transcript can be a sibling's reply. The rollover now rebinds the
+// session through the SessionStart hook's rollover marker, so a bound session
+// reads its own transcript and nothing else: here its own transcript has no
+// reply yet, so the answer is empty (no tmux pane in this hermetic test), never
+// another transcript's text, and the bound id is not moved.
+func TestGetLastResponseBestEffort_BoundStaleIDNeverAdoptsNewestTranscript(t *testing.T) {
 	tmpHome := t.TempDir()
 
 	origHome := os.Getenv("HOME")
@@ -95,8 +91,11 @@ func TestGetLastResponseBestEffort_RecoversFromStaleSessionIDViaDiskScan(t *test
 	if resp == nil {
 		t.Fatal("GetLastResponseBestEffort returned nil response")
 	}
-	if got := resp.Content; got != "CLEAN CONDUCTOR REPLY" {
-		t.Errorf("expected clean reply from newest real transcript, got %q", got)
+	if got := resp.Content; got != "" {
+		t.Errorf("bound session answered with another transcript's text %q; want empty", got)
+	}
+	if inst.ClaudeSessionID != staleID {
+		t.Errorf("ClaudeSessionID moved to %q; a bound id must not adopt a scanned transcript", inst.ClaudeSessionID)
 	}
 }
 

@@ -95,10 +95,11 @@ func TestGetLastResponseBestEffort_NewSessionNeverLeaksUnrelatedTranscript(t *te
 }
 
 // TestFindLatestClaudeTranscriptOnDisk_RolloverStillRecovers guards against
-// over-fixing #2299: a session that DID start and roll over (/clear or
-// compaction) mid-conversation must still recover its own new transcript via
-// the disk scan, even though LastStartedAt was stamped before that new
-// transcript was written.
+// over-fixing #2299: a live session with NO bound id yet (LastStartedAt known)
+// still recovers a transcript written after it started via the disk scan. A
+// session WITH a bound id never scans: its /clear or compaction rollover is
+// followed by the SessionStart hook's rebind, so the scan must not move it
+// (the second half below).
 func TestFindLatestClaudeTranscriptOnDisk_RolloverStillRecovers(t *testing.T) {
 	tmpHome := t.TempDir()
 
@@ -134,10 +135,8 @@ func TestFindLatestClaudeTranscriptOnDisk_RolloverStillRecovers(t *testing.T) {
 
 	inst := NewInstance("conductor-rollover", projectPath)
 	inst.Tool = "claude"
-	staleID := "cccccccc-cccc-cccc-cccc-cccccccccccc"
-	inst.ClaudeSessionID = staleID
-	// The session started 10 minutes ago; the rollover transcript below is
-	// written AFTER that, while the session is live.
+	// No bound id yet. The session started 10 minutes ago; the transcript
+	// below is written AFTER that, while the session is live.
 	inst.LastStartedAt = time.Now().Add(-10 * time.Minute)
 
 	rolledID := "dddddddd-dddd-dddd-dddd-dddddddddddd"
@@ -154,5 +153,23 @@ func TestFindLatestClaudeTranscriptOnDisk_RolloverStillRecovers(t *testing.T) {
 	}
 	if resp == nil || resp.Content != "POST ROLLOVER REPLY" {
 		t.Fatalf("expected rollover recovery to still work, got %+v", resp)
+	}
+
+	// The same disk with a bound (stale) id: the bound transcript is the only
+	// answer, so nothing comes back and the id stays put.
+	bound := NewInstance("conductor-bound", projectPath)
+	bound.Tool = "claude"
+	staleID := "cccccccc-cccc-cccc-cccc-cccccccccccc"
+	bound.ClaudeSessionID = staleID
+	bound.LastStartedAt = inst.LastStartedAt
+	resp, err = bound.GetLastResponseBestEffort()
+	if err != nil {
+		t.Fatalf("GetLastResponseBestEffort (bound) returned error: %v", err)
+	}
+	if resp == nil || resp.Content != "" {
+		t.Fatalf("bound session read a scanned transcript: %+v", resp)
+	}
+	if bound.ClaudeSessionID != staleID {
+		t.Fatalf("bound ClaudeSessionID moved to %q", bound.ClaudeSessionID)
 	}
 }

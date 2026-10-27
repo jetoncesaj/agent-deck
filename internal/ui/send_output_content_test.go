@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/asheshgoplani/agent-deck/internal/session"
 )
@@ -131,5 +132,34 @@ func TestGetSessionContentWithLive_NoOpForNonClaudeTool(t *testing.T) {
 	}
 	if inst.ClaudeSessionID != "unused-id" {
 		t.Errorf("ClaudeSessionID mutated for non-claude tool: got %q", inst.ClaudeSessionID)
+	}
+}
+
+// TestGetSessionContentWithLive_BoundIDNeverReadsNewestSiblingTranscript locks
+// the strict-read contract for the TUI copy/send-output path: a session with a
+// bound id whose own transcript is not on disk must not answer with the newest
+// transcript in a shared project directory (a sibling's reply). Without a pane
+// in this test the read fails instead.
+func TestGetSessionContentWithLive_BoundIDNeverReadsNewestSiblingTranscript(t *testing.T) {
+	tempProject := t.TempDir()
+	cleanup := setupClaudeConfigWithTwoJSONLs(t, tempProject,
+		"sibling-a", "SIBLING_A_REPLY",
+		"sibling-b", "SIBLING_B_REPLY")
+	defer cleanup()
+
+	inst := session.NewInstance("sess-A", tempProject)
+	inst.Tool = "claude"
+	inst.ClaudeSessionID = "own-uuid-without-transcript"
+	inst.LastStartedAt = time.Now().Add(-time.Hour) // the scan's mtime window admits both siblings
+
+	content, err := getSessionContentWithLive(inst, "")
+	if strings.Contains(content, "SIBLING_") {
+		t.Fatalf("TUI read returned a sibling's transcript: %q", content)
+	}
+	if err == nil {
+		t.Fatalf("expected an error without the session's own transcript or pane, got %q", content)
+	}
+	if inst.ClaudeSessionID != "own-uuid-without-transcript" {
+		t.Fatalf("ClaudeSessionID moved to %q", inst.ClaudeSessionID)
 	}
 }
