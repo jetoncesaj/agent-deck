@@ -141,6 +141,17 @@ func (c *UserConfig) ResolvePane(id, title, groupPath string) ResolvedPane {
 	return r
 }
 
+// PaneAfterStart, when set, runs after a session starts or restarts. The CLI
+// sets it to open the session's configured side panes; nil (tests, library
+// use) does nothing.
+var PaneAfterStart func(*Instance)
+
+func runPaneAfterStart(i *Instance) {
+	if h := PaneAfterStart; h != nil {
+		h(i)
+	}
+}
+
 // Pane roles.
 const (
 	PaneRoleWorker           = "worker"

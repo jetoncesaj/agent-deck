@@ -118,14 +118,18 @@ type HostPane struct {
 
 // WindowState is the primary window of a session as the host sees it.
 type WindowState struct {
-	WindowID  string
-	AgentPane string
-	Width     int
-	Zoomed    bool
-	Panes     []HostPane
+	WindowID   string
+	AgentPane  string
+	Width      int
+	Zoomed     bool
+	HostZoomed bool       // the host zoomed the agent pane (narrow window)
+	Layout     LayoutSpec // as recorded on the window by Open
+	Panes      []HostPane
 }
 
-const listFormat = "#{window_id}|#{pane_id}|#{pane_pid}|#{pane_width}|#{pane_height}|#{pane_dead}|#{window_width}|#{window_zoomed_flag}|#{@agentdeck_pane}|#{@agentdeck_pane_graphics}|#{@agentdeck_pane_session}|#{@agentdeck_pane_command}"
+const listFormat = "#{window_id}|#{pane_id}|#{pane_pid}|#{pane_width}|#{pane_height}|#{pane_dead}|#{window_width}|#{window_zoomed_flag}|#{@agentdeck_pane_width}|#{@agentdeck_pane_narrow}|#{@agentdeck_pane_mincols}|#{@agentdeck_pane_zoomed}|#{@agentdeck_pane}|#{@agentdeck_pane_graphics}|#{@agentdeck_pane_session}|#{@agentdeck_pane_command}"
+
+const listFields = 16
 
 // Inspect reads the session's primary window: the agent pane (the first pane
 // that is not a host pane) and the host panes in slot order.
@@ -136,14 +140,18 @@ func Inspect(run Runner, tmuxSession string) (WindowState, error) {
 	}
 	var st WindowState
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		f := strings.SplitN(line, "|", 12)
-		if len(f) < 12 {
+		f := strings.SplitN(line, "|", listFields)
+		if len(f) < listFields {
 			continue
 		}
 		st.WindowID = f[0]
 		st.Width, _ = strconv.Atoi(f[6])
 		st.Zoomed = f[7] == "1"
-		slot, _ := strconv.Atoi(f[8])
+		st.Layout.Width = f[8]
+		st.Layout.NarrowCols, _ = strconv.Atoi(f[9])
+		st.Layout.MinCols, _ = strconv.Atoi(f[10])
+		st.HostZoomed = f[11] == "1"
+		slot, _ := strconv.Atoi(f[12])
 		if slot <= 0 {
 			if st.AgentPane == "" {
 				st.AgentPane = f[1]
@@ -155,7 +163,7 @@ func Inspect(run Runner, tmuxSession string) (WindowState, error) {
 		h, _ := strconv.Atoi(f[4])
 		st.Panes = append(st.Panes, HostPane{
 			PaneID: f[1], Slot: slot, PID: pid, Width: w, Height: h,
-			Dead: f[5] == "1", Graphics: f[9] == "1", SessionID: f[10], Command: f[11],
+			Dead: f[5] == "1", Graphics: f[13] == "1", SessionID: f[14], Command: f[15],
 		})
 	}
 	if st.WindowID == "" {
@@ -317,8 +325,7 @@ func Cleanup(run Runner, tmuxSession, except string) {
 			return
 		}
 	}
-	zoomed, _ := run("show-options", "-wqv", "-t", st.WindowID, optZoomed)
-	if strings.TrimSpace(zoomed) == "1" && st.Zoomed {
+	if st.HostZoomed && st.Zoomed {
 		_, _ = run("resize-pane", "-Z", "-t", st.AgentPane)
 	}
 	_, _ = run(
@@ -362,20 +369,22 @@ func decideLayout(windowWidth int, zoomed, hostZoomed bool, l LayoutSpec) Layout
 // no host pane are left alone. Safe to call from several hosts at once: the
 // zoom toggle is guarded inside tmux.
 func ApplyLayout(run Runner, tmuxSession string) LayoutDecision {
+	return ApplyLayoutAs(run, tmuxSession, "")
+}
+
+// ApplyLayoutAs is ApplyLayout run by the host of pane self: it acts only
+// when self is the first host pane, so two stacked hosts do not both drive
+// the layout. An empty self always acts.
+func ApplyLayoutAs(run Runner, tmuxSession, self string) LayoutDecision {
 	st, err := Inspect(run, tmuxSession)
 	if err != nil || len(st.Panes) == 0 || st.AgentPane == "" {
 		return LayoutNone
 	}
-	opts, _ := run("display-message", "-p", "-t", st.AgentPane,
-		"#{"+optWidth+"}|#{"+optNarrow+"}|#{"+optMinCols+"}|#{"+optZoomed+"}")
-	f := strings.SplitN(strings.TrimSpace(opts), "|", 4)
-	for len(f) < 4 {
-		f = append(f, "")
+	if self != "" && st.Panes[0].PaneID != self {
+		return LayoutNone
 	}
-	narrow, _ := strconv.Atoi(f[1])
-	minCols, _ := strconv.Atoi(f[2])
-	l := LayoutSpec{Width: f[0], NarrowCols: narrow, MinCols: minCols}
-	d := decideLayout(st.Width, st.Zoomed, f[3] == "1", l)
+	l := st.Layout.withDefaults()
+	d := decideLayout(st.Width, st.Zoomed, st.HostZoomed, l)
 	switch d {
 	case LayoutZoom:
 		_, _ = run(

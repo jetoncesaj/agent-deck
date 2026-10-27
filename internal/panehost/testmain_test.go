@@ -57,7 +57,7 @@ func runTestHost() int {
 			return p
 		},
 		ProbePeriod: 100 * time.Millisecond,
-		Layout:      func() { ApplyLayout(run, session) },
+		Layout:      func() { ApplyLayoutAs(run, session, self) },
 		Grace:       500 * time.Millisecond,
 		OnControl: func(line string) {
 			if ctlLog == "" {
