@@ -326,7 +326,9 @@ func (i *Instance) CodexTurnTookInputSince(generation string, since time.Time) (
 // `session output --stream` (GetJSONLPathChecked: live peers sharing both the
 // session id and the transcript dir), instead of silently returning another
 // session's output. Non-Claude tools and the no-collision case delegate to
-// GetLastResponseBestEffort unchanged.
+// GetLastResponseBestEffort unchanged. `session output` itself now reads a
+// local Claude session through GetLastResponseFromOwnTranscript (via
+// GetLastResponseAtVersion), which has no disk-scan or pane fallback.
 func (i *Instance) GetLastResponseBestEffortChecked(peers []*Instance) (*ResponseOutput, error) {
 	if IsClaudeCompatible(i.Tool) {
 		if _, err := i.GetJSONLPathChecked(peers); err != nil {
@@ -384,6 +386,17 @@ func (i *Instance) ResponseContentVersion(peers []*Instance) string {
 // taken before the read, so a write racing the read can only make the next
 // comparison miss (one extra read), never hide a change.
 func (i *Instance) GetLastResponseAtVersion(peers []*Instance, version string) (*ResponseOutput, bool, error) {
+	if IsClaudeCompatible(i.Tool) && i.TranscriptIsResolvableLocally() {
+		// `session output` for a local Claude session reads only the
+		// session's own bound transcript: never the newest-mtime disk scan,
+		// which in a shared project directory returns another session's
+		// reply. The version was taken from the same path.
+		resp, err := i.GetLastResponseFromOwnTranscript(peers)
+		if err != nil {
+			return nil, false, err
+		}
+		return resp, version != "", nil
+	}
 	if version != "" {
 		read := i.getClaudeLastResponse
 		if IsCodexCompatible(i.Tool) {
@@ -395,6 +408,43 @@ func (i *Instance) GetLastResponseAtVersion(peers []*Instance, version string) (
 	}
 	resp, err := i.GetLastResponseBestEffortChecked(peers)
 	return resp, false, err
+}
+
+// GetLastResponseFromOwnTranscript returns the last assistant reply from the
+// transcript of this Claude session's own bound claude_session_id, resolved
+// against the session's own Claude config dir (GetJSONLPathChecked), and
+// nothing else. Several sessions can share one project directory, so any
+// fallback that picks "the newest transcript there" can answer with another
+// session's text; this read instead fails with a clear error when the
+// session has no bound id, its id collides with another live session, or
+// its transcript is not on disk. A bound transcript that holds no assistant
+// reply yet answers an empty response: the session has said nothing.
+func (i *Instance) GetLastResponseFromOwnTranscript(peers []*Instance) (*ResponseOutput, error) {
+	if !IsClaudeCompatible(i.Tool) {
+		return nil, fmt.Errorf("session %s is not a Claude session", i.ID)
+	}
+	if !i.TranscriptIsResolvableLocally() {
+		return nil, fmt.Errorf("instance %s runs on %s; its Claude transcript is not on this machine", i.ID, i.SSHHost)
+	}
+	if i.ClaudeSessionID == "" {
+		return nil, fmt.Errorf("session %s has no bound claude_session_id yet; refusing to read any other session's transcript", i.ID)
+	}
+	path, err := i.GetJSONLPathChecked(peers)
+	if err != nil {
+		return nil, fmt.Errorf("refusing to read a colliding transcript: %w", err)
+	}
+	if path == "" {
+		return nil, fmt.Errorf("transcript for claude_session_id %s (session %s) not found; refusing to fall back to another session's transcript", i.ClaudeSessionID, i.ID)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read transcript for claude_session_id %s: %w", i.ClaudeSessionID, err)
+	}
+	resp, err := parseClaudeLastAssistantMessage(data, filepath.Base(path))
+	if err != nil {
+		return &ResponseOutput{Tool: "claude", Role: "assistant", Content: "", SessionID: i.ClaudeSessionID}, nil
+	}
+	return resp, nil
 }
 
 // GetLastResponseBestEffort returns the last assistant response with fallback logic
@@ -980,7 +1030,11 @@ func (i *Instance) getClaudeLastResponse() (*ResponseOutput, error) {
 		return nil, fmt.Errorf("instance %s runs on %s; its Claude transcript is not on this machine", i.ID, i.SSHHost)
 	}
 
-	sessionFile := resolveClaudeTranscriptPath(GetClaudeConfigDir(), i.ProjectPath, i.ClaudeSessionID, i.EffectiveWorkingDir())
+	// The session's own config dir first (GetJSONLPath: account, conductor,
+	// group; then the process-wide dir). Resolving only the process-wide dir
+	// missed every account-scoped transcript, which sent callers to the
+	// newest-mtime disk scan and another session's reply.
+	sessionFile := i.GetJSONLPath()
 	if sessionFile == "" {
 		return nil, fmt.Errorf("session file not found for claude_session_id %s", i.ClaudeSessionID)
 	}

@@ -114,25 +114,26 @@ func TestIssue2481_SessionOutputIfVersionSkipsUnchangedTranscript(t *testing.T) 
 	}
 }
 
-// Without a transcript file the response comes from a fallback whose source is
-// not a versioned file: no content_version is emitted and --if-version can
-// never short-circuit, so a caller can only ever skip a provably unchanged read.
+// Without a transcript of its own a Claude session has no response to read:
+// `session output` fails (no fallback text, so no content_version), and
+// --if-version can never short-circuit into "unchanged".
 func TestIssue2481_SessionOutputNoVersionWithoutTranscript(t *testing.T) {
 	if testing.Short() {
 		t.Skip("subprocess CLI test skipped in short mode")
 	}
 	home := t.TempDir()
 	id := sessionMoveAddSession(t, home, filepath.Join(home, "proj"), "no-transcript")
-	out := issue2481OutputJSON(t, home, id, "--json")
-	if _, ok := out["content_version"]; ok {
-		t.Fatalf("fallback read carries content_version: %v", out)
+	for _, args := range [][]string{{"--json"}, {"--json", "--if-version", "v1-anything"}} {
+		stdout, stderr, code := runAgentDeck(t, home, append([]string{"session", "output", id}, args...)...)
+		if code == 0 {
+			t.Fatalf("session output %v succeeded without a transcript\nstdout: %s\nstderr: %s", args, stdout, stderr)
+		}
+		if strings.Contains(stdout, "content_version") || strings.Contains(stdout, "unchanged") {
+			t.Fatalf("session output %v carried a version without a transcript: %s", args, stdout)
+		}
 	}
-	probe := issue2481OutputJSON(t, home, id, "--json", "--if-version", "v1-anything")
-	if _, ok := probe["unchanged"]; ok {
-		t.Fatalf("--if-version short-circuited without a versioned transcript: %v", probe)
-	}
-	if got := issue2481ReadLogLines(t, home); got != 2 {
-		t.Fatalf("read log lines = %d, want 2 (both were real reads)", got)
+	if got := issue2481ReadLogLines(t, home); got != 0 {
+		t.Fatalf("read log lines = %d, want 0 (nothing was read)", got)
 	}
 }
 
