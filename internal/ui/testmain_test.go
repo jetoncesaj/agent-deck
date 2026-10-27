@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/asheshgoplani/agent-deck/internal/testutil"
+	"github.com/asheshgoplani/agent-deck/internal/update"
 )
 
 // TestMain ensures all UI tests use the _test profile to prevent
@@ -35,6 +36,11 @@ func runTestMain(m *testing.M) int {
 	// exec.Command("go", ...) built from os.Environ() for the life of this
 	// binary, including watcherBuildEnvironment's builds.
 	os.Setenv("GOTELEMETRY", "off")
+
+	// The suite exercises the upstream update banner and installer flows,
+	// which a fork build keeps behind the off-by-default self-update switch
+	// (internal/update/fork.go).
+	update.SetSelfUpdateEnabledForTesting(true)
 
 	// Attach-helper mode for the fake SSH endpoint in
 	// embedded_remote_leading_output_test.go: the binary stands in for the

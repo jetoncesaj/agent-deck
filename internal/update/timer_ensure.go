@@ -126,6 +126,12 @@ type TimerEnsurePlan struct {
 // moves the replaced files to a backup first.
 // Read-only: it queries the init system through r but changes nothing.
 func PlanEnsureTimer(c TimerConfig, r Runner, auto bool) (TimerEnsurePlan, error) {
+	// A fork build never installs or heals com.agentdeck.autoupdate (or
+	// the systemd timer): that timer's only job is to replace this binary
+	// with an upstream release (fork.go). Uninstall and status stay.
+	if !SelfUpdateEnabled() {
+		return TimerEnsurePlan{Result: TimerEnsureResult{Action: TimerActionSkipped, Reason: ErrSelfUpdateDisabled.Error(), Status: QueryTimerStatus(c, nil)}}, nil
+	}
 	switch c.GOOS {
 	case "linux":
 		return planEnsureSystemd(c, r, auto), nil
@@ -157,6 +163,9 @@ func RunEnsurePlan(c TimerConfig, r Runner, p TimerEnsurePlan, log *slog.Logger)
 	res := p.Result
 	if len(p.Steps) == 0 {
 		return res, nil
+	}
+	if !SelfUpdateEnabled() {
+		return TimerEnsureResult{Action: TimerActionSkipped, Reason: ErrSelfUpdateDisabled.Error(), Status: QueryTimerStatus(c, nil)}, nil
 	}
 	if err := p.Execute(r, log); err != nil {
 		res.Status = QueryTimerStatus(c, r)

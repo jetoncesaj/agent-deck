@@ -93,6 +93,9 @@ func NextRecheckAfterFailures(last time.Time, consecutive int) time.Time {
 // prompts, takes the cross-process install lock (so a concurrent timer run,
 // TUI or daemon cannot install twice) and prints one summary line.
 func RunUnattendedInstall(ctx context.Context, exe, trigger string) (string, error) {
+	if !SelfUpdateEnabled() {
+		return "", ErrSelfUpdateDisabled
+	}
 	// #nosec G204 -- exe is our own executable path (os.Executable) and
 	// every argument is fixed.
 	cmd := exec.CommandContext(ctx, exe, "update", "--unattended", "--trigger", trigger)
@@ -176,6 +179,9 @@ type Installer struct {
 // Run blocks until ctx is done. It is safe to run on its own goroutine;
 // the Installer is not safe for concurrent use beyond that.
 func (in *Installer) Run(ctx context.Context) {
+	if !SelfUpdateEnabled() {
+		return // a fork build never installs an upstream release (fork.go)
+	}
 	in.fillDefaults()
 	if in.Exe == "" {
 		return

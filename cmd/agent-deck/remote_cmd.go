@@ -1219,6 +1219,9 @@ func reorderRemoteArgs(fs *flag.FlagSet, args []string) []string {
 // written means no sweep); the explicit `agent-deck update` path resets
 // that stamp too, so a fresh controller version still sweeps promptly.
 func startRemoteAutoUpdate() {
+	if !update.SelfUpdateEnabled() {
+		return // a fork build never updates its remotes to a release (fork.go)
+	}
 	// Cache claims can wait on another writer, so they also belong off startup.
 	go func() {
 		settings := session.GetUpdateSettings()

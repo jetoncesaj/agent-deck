@@ -735,6 +735,11 @@ func DeployRemoteBinary(ctx context.Context, runner RemoteBinaryInstaller, targe
 	if opts.LocalBuild != nil {
 		return deployLocalBuild(ctx, runner, opts)
 	}
+	// A fork controller pushes only its own local build (`remote update
+	// --from-build`), never an upstream release (fork.go).
+	if !update.SelfUpdateEnabled() {
+		return "", update.ErrSelfUpdateDisabled
+	}
 	goos, goarch, err := runner.DetectPlatform(ctx)
 	if err != nil {
 		return "", err

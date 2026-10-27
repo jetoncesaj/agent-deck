@@ -47,6 +47,12 @@ import (
 
 var Version = "1.16.33" // overridden at build time via -ldflags "-X main.Version=..."
 
+// A fork build (self-update off, internal/update/fork.go) reports its
+// version with the "-fork" suffix, whatever -X main.Version set.
+func init() {
+	Version = update.ForkVersion(Version)
+}
+
 // Table column widths for list command output
 const (
 	tableColTitle     = 20
@@ -4228,6 +4234,15 @@ func handleUpdate(args []string) {
 	}
 
 	if err := parseCLIFlags(fs, normalizeArgs(fs, args)); err != nil {
+		exitCLI(1)
+	}
+
+	// A fork build never replaces itself with an upstream release
+	// (internal/update/fork.go): only removing a timer an earlier upstream
+	// install left behind, and reading its status, remain.
+	if !update.SelfUpdateEnabled() && !*uninstallTimer && !*timerStatus {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", update.ErrSelfUpdateDisabled)
+		fmt.Fprintln(os.Stderr, "This is a fork build of agent-deck "+Version+"; it is updated by rebuilding it, never from a release.")
 		exitCLI(1)
 	}
 

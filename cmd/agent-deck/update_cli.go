@@ -429,6 +429,9 @@ func realUnattendedDeps(trigger string) (unattendedDeps, func()) {
 // nudge is not meant to fan out across hops, only from the one controller
 // that actually installed a release to the remotes it is configured with.
 func remoteFollowUpForTrigger(trigger string, log *slog.Logger) func(latest string) {
+	if !update.SelfUpdateEnabled() {
+		return nil // a fork build never nudges remotes to update (fork.go)
+	}
 	if trigger == "nudge" || trigger == "nudge-fallback" {
 		return nil
 	}

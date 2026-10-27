@@ -85,6 +85,10 @@ func (r *SSHRunner) FetchTimerStatus(ctx context.Context) update.TimerStatus {
 // --install-timer but answers in text is reported as Legacy with its first
 // line; a remote that rejects the flag is an error.
 func (r *SSHRunner) InstallUpdateTimer(ctx context.Context, ensureOnly bool) (RemoteTimerInstall, error) {
+	// A fork controller never arms a remote's self-update timer (fork.go).
+	if !update.SelfUpdateEnabled() {
+		return RemoteTimerInstall{}, update.ErrSelfUpdateDisabled
+	}
 	flag := "--install-timer"
 	if ensureOnly {
 		flag = "--ensure-timer"

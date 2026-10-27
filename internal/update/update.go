@@ -163,8 +163,12 @@ const SkipUpdateCheckEnv = "AGENTDECK_SKIP_UPDATE_CHECK"
 const recentReleasesLimit = 30
 
 // isUpdateCheckSkipped reports whether AGENTDECK_SKIP_UPDATE_CHECK is set to
-// a truthy value.
+// a truthy value, or this is a fork build with self-update off (fork.go):
+// then no check, cache read or nudge ever reports an update.
 func isUpdateCheckSkipped() bool {
+	if !SelfUpdateEnabled() {
+		return true
+	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(SkipUpdateCheckEnv))) {
 	case "", "0", "false", "no", "off":
 		return false
@@ -255,6 +259,11 @@ func githubAPIGet(url string) (*http.Response, bool, error) {
 // Modified instead of re-sending (and re-billing the rate limit for) the
 // full body.
 func githubAPIGetConditional(url, etag string) (*http.Response, bool, error) {
+	// A fork build never asks GitHub for releases (fork.go). Every release
+	// lookup (latest, by tag, recent) goes through here.
+	if !SelfUpdateEnabled() {
+		return nil, false, ErrSelfUpdateDisabled
+	}
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, false, err
@@ -523,8 +532,13 @@ func CompareVersions(v1, v2 string) int {
 
 // splitPreRelease separates "1.2.3-rc.1+build" into its numeric core "1.2.3"
 // and pre-release tag "rc.1". Build metadata after "+" is ignored either way.
+//
+// A trailing ForkVersionSuffix ("1.16.33-fork", fork.go) is build metadata
+// too, not a pre-release: a fork build orders equal to the upstream release
+// it is built from.
 func splitPreRelease(v string) (core, pre string) {
 	v, _, _ = strings.Cut(v, "+")
+	v = strings.TrimSuffix(v, ForkVersionSuffix)
 	core, pre, _ = strings.Cut(v, "-")
 	return core, pre
 }
@@ -766,6 +780,9 @@ func CheckForUpdate(currentVersion string, forceCheck bool) (*UpdateInfo, error)
 func PerformVerifiedUpdate(release *Release, goos, goarch string) (err error) {
 	done := optiming.StartResult("update.install")
 	defer func() { done(err != nil) }()
+	if !SelfUpdateEnabled() {
+		return ErrSelfUpdateDisabled
+	}
 	execPath, upgradeCmd, managed, err := detectHomebrewManagedInstall()
 	if err != nil {
 		return fmt.Errorf("failed to detect install type: %w", err)
@@ -900,6 +917,9 @@ type ChangelogEntry struct {
 
 // FetchChangelog fetches the CHANGELOG.md from GitHub
 func FetchChangelog() (string, error) {
+	if !SelfUpdateEnabled() {
+		return "", ErrSelfUpdateDisabled
+	}
 	url := fmt.Sprintf("https://raw.githubusercontent.com/%s/main/CHANGELOG.md", GitHubRepo)
 
 	client := &http.Client{Timeout: 10 * time.Second}

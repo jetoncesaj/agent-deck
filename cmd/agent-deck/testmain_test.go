@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/asheshgoplani/agent-deck/internal/testutil"
+	"github.com/asheshgoplani/agent-deck/internal/update"
 	"github.com/asheshgoplani/agent-deck/tests/eval/harness"
 )
 
@@ -38,6 +39,14 @@ func runTestMain(m *testing.M) int {
 	isHelperProcess := os.Getenv("AGENT_DECK_TASK6_HELPER_PROCESS") != ""
 
 	widenTestParallelism()
+
+	// The suite exercises the upstream update flows, which a fork build
+	// keeps behind the off-by-default self-update switch
+	// (internal/update/fork.go), so it runs with the switch on and the
+	// unsuffixed version; fork_self_update_test.go covers the fork default.
+	// The prebuilt CLI fixture is built with the switch on too.
+	update.SetSelfUpdateEnabledForTesting(true)
+	Version = strings.TrimSuffix(Version, update.ForkVersionSuffix)
 
 	if !isHelperProcess {
 		// Pin the Go build and module caches before HOME moves: a test that

@@ -33,5 +33,9 @@ func runTestMain(m *testing.M) int {
 	cleanupTmux := testutil.IsolateTmuxSocket()
 	defer cleanupTmux()
 	os.Unsetenv(launchdServiceEnv)
+	// The suite exercises the upstream update flows, which a fork build
+	// keeps behind the off-by-default selfUpdate switch (fork.go); the
+	// fork's own default is covered by fork_test.go, which turns it off.
+	selfUpdate = selfUpdateOn
 	return m.Run()
 }

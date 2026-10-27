@@ -12,6 +12,7 @@ import (
 
 	"github.com/asheshgoplani/agent-deck/internal/testutil"
 	"github.com/asheshgoplani/agent-deck/internal/tmux"
+	"github.com/asheshgoplani/agent-deck/internal/update"
 )
 
 // bootstrapSessionName is the idle tmux session kept alive for the lifetime
@@ -231,6 +232,11 @@ func runTestMain(m *testing.M) int {
 	// See internal/testutil/homeenv.go for the postmortem.
 	cleanupHome := testutil.IsolateHome()
 	defer cleanupHome()
+	// The suite exercises the upstream remote-update flows, which a fork
+	// build keeps behind the off-by-default self-update switch
+	// (internal/update/fork.go); fork_remote_update_test.go covers the
+	// fork default.
+	update.SetSelfUpdateEnabledForTesting(true)
 	// Most session tests replace HOME per case and remove it immediately.
 	// They exercise the existing writers, not the process-owned bus. Explicitly
 	// opt out here so a writer cannot race a case's TempDir cleanup. Dedicated

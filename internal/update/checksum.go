@@ -101,6 +101,11 @@ func DownloadVerifiedBinary(release *Release, goos, goarch string) ([]byte, erro
 // cancelling it stops the download promptly. progress, when non-nil, receives
 // a self-overwriting progress line for the archive.
 func DownloadVerifiedBinaryContext(ctx context.Context, release *Release, goos, goarch string, progress io.Writer) ([]byte, error) {
+	// A fork build never downloads an upstream release binary, for itself
+	// or for a remote (fork.go).
+	if !SelfUpdateEnabled() {
+		return nil, ErrSelfUpdateDisabled
+	}
 	if release == nil {
 		return nil, fmt.Errorf("nil release")
 	}

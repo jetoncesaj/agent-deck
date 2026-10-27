@@ -42,7 +42,10 @@ func ensureChannelsCLIBinary() error {
 		return fmt.Errorf("mkdir bin tmp: %w", err)
 	}
 	bin := filepath.Join(binDir, "agent-deck-test")
-	build := exec.Command("go", "build", "-o", bin, ".")
+	// Upstream mode, like the in-process suite (testmain_test.go): the
+	// fork's off-by-default self-update switch is covered by
+	// fork_self_update_test.go with a binary of its own.
+	build := exec.Command("go", "build", "-ldflags", selfUpdateOnLDFlags, "-o", bin, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		return fmt.Errorf("go build: %w\noutput: %s", err, out)
 	}
