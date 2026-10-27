@@ -45,7 +45,7 @@ import (
 	"github.com/asheshgoplani/agent-deck/internal/web"
 )
 
-var Version = "1.16.33" // overridden at build time via -ldflags "-X main.Version=..."
+var Version = "1.16.34" // overridden at build time via -ldflags "-X main.Version=..."
 
 // A fork build (self-update off, internal/update/fork.go) reports its
 // version with the "-fork" suffix, whatever -X main.Version set.
@@ -492,6 +492,15 @@ func main() {
 	if len(args) == 0 || !storeRootQuietCommands[args[0]] {
 		session.EnsureStateRootPrivate(os.Stderr)
 	}
+	// FX-8 safe defaults: an install that predates them keeps today's values
+	// for every unset switch (dangerous_mode, auto_trust_folders), written
+	// into its config.toml once with a one-time notice. Only at an
+	// interactive start: daemons, hooks, scripts and the auto-update restart
+	// path never edit config.toml (their unset switches resolve the same way
+	// through session.InstallKind). The TUI prints the notice after it exits.
+	if (len(args) == 0 || !storeRootQuietCommands[args[0]]) && stdinStdoutIsTerminal() {
+		applyInstallDefaults(len(args) == 0 || !commandRegistry[args[0]])
+	}
 
 	var webEnabled bool
 	// webHeadless: true when --no-tui is passed to the `web` subcommand.
@@ -628,6 +637,9 @@ func main() {
 		case "remote-agent":
 			handleRemoteAgent(profile, args[1:])
 			return
+		case "provider":
+			handleProvider(profile, args[1:])
+			return
 		case "system":
 			handleSystem(args[1:])
 			return
@@ -639,6 +651,9 @@ func main() {
 			return
 		case "open":
 			handleOpen(profile, args[1:])
+			return
+		case "ask":
+			handleAsk(profile, args[1:])
 			return
 		case "browser":
 			handleBrowser(profile, args[1:])
@@ -1452,6 +1467,7 @@ func main() {
 	tuiRunning.Store(true)
 	_, runErr := p.Run()
 	tuiRunning.Store(false)
+	printDeferredInstallNotice()
 	homeModel.CloseTelemetryAfterRun(runErr)
 	if runErr != nil {
 		reportTUIRunError(runErr)
@@ -1616,7 +1632,7 @@ var commandRegistry = map[string]bool{
 	"group": true, "try": true, "launch": true, "conductor": true,
 	"agents": true, "agent": true,
 	"telegram-doctor": true, "watcher": true, "openclaw": true, "oc": true,
-	"remote": true, "remote-agent": true, "system": true, "worktree": true, "wt": true, "costs": true, "open": true, "browser": true, "file": true, "events": true, "triggers": true, "daemon": true, "usage": true, "web": true, "config": true, "recall": true,
+	"remote": true, "remote-agent": true, "provider": true, "system": true, "worktree": true, "wt": true, "costs": true, "open": true, "ask": true, "browser": true, "file": true, "events": true, "triggers": true, "daemon": true, "usage": true, "web": true, "config": true, "recall": true,
 	"uninstall": true, "migrate-paths": true, "hook-handler": true,
 	"codex-notify": true, "hooks": true, "codex-hooks": true, "gemini-hooks": true,
 	"hermes-hooks": true, "cursor-hooks": true, "tmux-hooks": true, "pi-hooks": true, "deepseek": true, "notify-daemon": true,
@@ -2050,6 +2066,7 @@ func handleAddCommand(profile string, args []string, inspectFlags func(*flag.Fla
 	// the user confirms creating a missing directory on the server; the local
 	// dialog asks the same question and calls os.MkdirAll itself.
 	createDir := fs.Bool("create-dir", false, "Create the project directory when it does not exist (like mkdir -p)")
+	trustFolder := fs.Bool("trust-folder", false, "Let agent-deck mark this folder trusted for the tool (adds it to [security] trusted_folders in config.toml)")
 
 	// Sandbox flags
 	sandbox := fs.Bool("sandbox", false, "Run session in Docker sandbox")
@@ -2422,6 +2439,12 @@ func handleAddCommand(profile string, args []string, inspectFlags func(*flag.Fla
 			exitCLI(1)
 		}
 	}
+	if *trustFolder && *sshHost == "" {
+		if err := session.AddTrustedFolder(path); err != nil {
+			fmt.Printf("Error: %v\n", err)
+			exitCLI(1)
+		}
+	}
 
 	// Handle worktree creation
 	var worktreePath, worktreeRepoRoot, worktreeType string
@@ -2704,6 +2727,11 @@ func handleAddCommand(profile string, args []string, inspectFlags func(*flag.Fla
 
 	// Validate the selected slot before account-dependent loadout or registration.
 	newInstance.Account = selectedAccount
+	// #2895: no --account or AGENTDECK_ACCOUNT → [claude].default_account.
+	// Not for --ssh: the slot names a config_dir on this machine.
+	if newInstance.Account == "" && *sshHost == "" {
+		newInstance.Account = defaultCLIAccountSlot(newInstance, parentInstance)
+	}
 	if err := newInstance.ValidateAccount(); err != nil {
 		out.Error(err.Error(), ErrCodeInvalidOperation)
 		exitCLI(1)
@@ -4707,6 +4735,7 @@ func printHelp() {
 	fmt.Println("  session          Manage session lifecycle")
 	fmt.Println("  pane             Side panes beside a session (open, close, status)")
 	fmt.Println("  open <file|url>  Show a page in the Mac app Browser panel [--session <id|title>]")
+	fmt.Println("  ask <kind>       Ask the owner for a secret, choice or text in a dialog (docs/ask.md)")
 	fmt.Println("  browser <op>     Drive the session's Mac app Browser: open, tabs, close, click, type, read, shot")
 	fmt.Println("  file bundle      Export a page folder as a size-capped tar [--session <id>]")
 	fmt.Println("  file read        Print a file under [web] file_link_roots [--json]")
@@ -4727,6 +4756,7 @@ func printHelp() {
 	fmt.Println("  recall           Search every Claude conversation on this machine (docs/recall.md)")
 	fmt.Println("  web              Start TUI with web UI server running alongside")
 	fmt.Println("  remote           Manage remote agent-deck instances")
+	fmt.Println("  provider         List and test sandbox providers (remote add --provider)")
 	fmt.Println("  conductor        Manage conductor meta-agent orchestration")
 	fmt.Println("  triggers         What wakes each session: jobs, heartbeats, channels (docs/triggers.md)")
 	fmt.Println("  agents           List adopted agents, grouped by machine")
@@ -4808,12 +4838,17 @@ func printHelp() {
 	fmt.Println("  remote add <name> <user@host>             Register a remote agent-deck instance")
 	fmt.Println("    --agent-deck-path <path>                Path to agent-deck binary on remote (default: agent-deck)")
 	fmt.Println("    --profile <name>                        Remote profile to use (default: default)")
+	fmt.Println("  remote add --provider <name> [--name x]   Create a provider sandbox and register it")
 	fmt.Println("  remote remove, rm <name>                  Remove a remote")
+	fmt.Println("  remote destroy <name> [--yes] [--force]   Stop a sandbox remote's sessions and destroy it")
 	fmt.Println("  remote list, ls [--json]                  List configured remotes")
 	fmt.Println("  remote sessions [name] [--json]           Show sessions on remote(s)")
 	fmt.Println("  remote attach <name> <session>            Attach to a remote session")
 	fmt.Println("  remote rename <name> <session> <title>    Rename a remote session")
 	fmt.Println("  remote update [name]                      Install/upgrade agent-deck on remote(s)")
+	fmt.Println("  provider list [--json]                    List sandbox providers and whether they answer")
+	fmt.Println("  provider test <name> [--create]           Check a provider (create round trip with --create)")
+	fmt.Println("  launch --provider <name> [--name x] <path> [flags]  Create a sandbox remote and launch there")
 	fmt.Println()
 	fmt.Println("Worktree Commands:")
 	fmt.Println("  worktree list             List worktrees with session associations")

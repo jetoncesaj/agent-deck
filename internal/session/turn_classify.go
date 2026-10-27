@@ -192,19 +192,9 @@ func contentHasBlock(content json.RawMessage, blockType string) bool {
 	return false
 }
 
-// ScanTranscriptTurn reads the just-finished main-chain turn from the
-// transcript tail. A missing or unreadable file returns an error so callers
-// fall back to the legacy signal.
-func ScanTranscriptTurn(path string) (TurnFacts, error) {
-	lines, err := TranscriptTailLines(path, turnScanTailLines)
-	if err != nil {
-		return TurnFacts{}, err
-	}
-	return classifyTranscriptTail(lines), nil
-}
-
-// classifyTranscriptTail is ScanTranscriptTurn on already-read lines (oldest
-// first). Exposed for tests with fixture transcripts.
+// classifyTranscriptTail classifies the just-finished main-chain turn from
+// already-read transcript tail lines (oldest first). Exposed for tests with
+// fixture transcripts.
 func classifyTranscriptTail(lines []string) TurnFacts {
 	var facts TurnFacts
 	foundAssistant := false

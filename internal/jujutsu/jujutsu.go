@@ -150,28 +150,6 @@ func getWorkspacePath(repoDir, workspaceName string) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
-// IsDefaultWorkspace returns true if the given directory is the default workspace.
-func IsDefaultWorkspace(dir string) (bool, error) {
-	root, err := GetRepoRoot(dir)
-	if err != nil {
-		return false, err
-	}
-	absDir, err := filepath.Abs(dir)
-	if err != nil {
-		return false, err
-	}
-	return absDir == root, nil
-}
-
-// IsWorktree checks if the directory is a non-default jj workspace.
-func IsWorktree(dir string) bool {
-	isDefault, err := IsDefaultWorkspace(dir)
-	if err != nil {
-		return false
-	}
-	return !isDefault
-}
-
 // GetWorktreeBaseRoot returns the default workspace path (equivalent to main worktree in git).
 func GetWorktreeBaseRoot(dir string) (string, error) {
 	return GetRepoRoot(dir)
@@ -295,21 +273,6 @@ func (b *JJBackend) CheckoutBranch(branchName string) error {
 		return fmt.Errorf("failed to checkout %s: %s: %w", branchName, strings.TrimSpace(string(output)), err)
 	}
 	return nil
-}
-
-// AbortMerge undoes the last operation (equivalent to aborting a merge).
-func AbortMerge(repoDir string) error {
-	cmd := exec.Command("jj", "undo", "-R", repoDir) // #nosec G204 -- jj invocations with slice args, not shell-formed
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to undo: %s: %w", strings.TrimSpace(string(output)), err)
-	}
-	return nil
-}
-
-// GetMainWorktreePath returns the path to the default workspace.
-func GetMainWorktreePath(dir string) (string, error) {
-	return GetRepoRoot(dir)
 }
 
 // workspaceNameFromPath generates a workspace name from a filesystem path.

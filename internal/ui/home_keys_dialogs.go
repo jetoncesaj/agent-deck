@@ -98,9 +98,9 @@ func (h *Home) handleNewDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			h.newDialog.CommitInFlightMultiRepoEdit()
 		}
 
-		// Validate before creating session
-		if validationErr := h.newDialog.Validate(); validationErr != "" {
-			h.newDialog.SetError(validationErr)
+		// Validate before creating session. Enter creates from any row
+		// (ASK-110), so the error takes focus to the field at fault.
+		if validationErr := h.newDialog.ShowValidationError(); validationErr != "" {
 			return h, nil
 		}
 
@@ -128,6 +128,12 @@ func (h *Home) handleNewDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				create = h.remoteCreateSink
 			}
 			return h, create(remoteName, opts)
+		}
+
+		// A local opening whose Where row picked a remote or a new sandbox
+		// creates there; "this machine" falls through unchanged.
+		if where := h.newDialog.GetWhere(); where.kind != whereLocal {
+			return h, h.submitNewDialogWhere(where)
 		}
 
 		// Get values including worktree settings.
@@ -158,6 +164,20 @@ func (h *Home) handleNewDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// there is nothing to anchor a relative path to.
 			h.newDialog.SetError("Cannot resolve a relative path here — enter an absolute path")
 			return h, nil
+		}
+
+		// ASK-110: an empty name is taken from the folder (the one the name
+		// field previews), made unique like the zoxide flow. Written back to
+		// the field so a create-directory confirmation shows the same name.
+		if name == "" {
+			base := path
+			if multiRepoEnabled && len(multiRepoPaths) > 0 {
+				base = multiRepoPaths[0]
+			}
+			h.instancesMu.RLock()
+			name = ensureUniqueSessionTitle(deriveSessionNameFromPath(base), h.instances)
+			h.instancesMu.RUnlock()
+			h.newDialog.nameInput.SetValue(name)
 		}
 
 		// Remember the submitted tool so the next new-session dialog preselects

@@ -216,7 +216,7 @@ func handleCodexNotify() {
 		return
 	}
 
-	writeCodexHookStatus(instanceID, status, sessionID, event, turnID)
+	writeCodexHookStatusDone(instanceID, status, sessionID, event, turnID, codexNotifyDoneSignal(event, data))
 	spoolCommsFromCodexNotify(instanceID, sessionID, turnID, event, data)
 }
 
@@ -227,6 +227,26 @@ type codexNotifyText struct {
 	LastAssistantMessage string   `json:"last-assistant-message"`
 	InputMessages        []string `json:"input-messages"`
 	Cwd                  string   `json:"cwd"`
+}
+
+// codexNotifyDoneSignal is the completion sentinel (issue #1186) a Codex turn
+// ended with, read from the notify payload's last-assistant-message: Codex's
+// counterpart of the Claude Stop hook's transcript scan, with the same
+// ScanDoneSentinel rules (a valid sentinel line, last one wins). Only a
+// turn-completion edge carries one; issue #2899.
+func codexNotifyDoneSignal(event string, data []byte) *session.DoneSignal {
+	if _, completed := codexTurnEdge(event); !completed || len(data) == 0 {
+		return nil
+	}
+	var t codexNotifyText
+	if json.Unmarshal(data, &t) != nil {
+		return nil
+	}
+	sig, ok := session.ScanDoneSentinel(t.LastAssistantMessage)
+	if !ok {
+		return nil
+	}
+	return &sig
 }
 
 // spoolCommsFromCodexNotify forwards a completed turn's text to the daemon's
@@ -285,6 +305,18 @@ func codexTurnEdge(event string) (started, completed bool) {
 // lock. Notify invocations are separate processes and can overlap; serializing
 // the read/modify/write makes the generation proof deterministic.
 func writeCodexHookStatus(instanceID, status, sessionID, event string, turnIDs ...string) {
+	turnID := ""
+	if len(turnIDs) > 0 {
+		turnID = turnIDs[0]
+	}
+	writeCodexHookStatusDone(instanceID, status, sessionID, event, turnID, nil)
+}
+
+// writeCodexHookStatusDone is writeCodexHookStatus plus the turn's completion
+// sentinel. done is persisted as done_status/done_summary in the same locked
+// write, so the daemon emits a finished record exactly as for a Claude Stop;
+// nil (no sentinel, or not a completion edge) clears them as before.
+func writeCodexHookStatusDone(instanceID, status, sessionID, event, turnID string, done *session.DoneSignal) {
 	if instanceID == "" || status == "" {
 		return
 	}
@@ -346,10 +378,7 @@ func writeCodexHookStatus(instanceID, status, sessionID, event string, turnIDs .
 		evidenceSessionID = session.ReadHookSessionAnchor(instanceID)
 	}
 	started, completed := codexTurnEdge(event)
-	turnID := ""
-	if len(turnIDs) > 0 {
-		turnID = strings.TrimSpace(turnIDs[0])
-	}
+	turnID = strings.TrimSpace(turnID)
 	if started {
 		prior.CodexCompletedGeneration = ""
 		prior.CodexCompletedSessionID = ""
@@ -390,6 +419,9 @@ func writeCodexHookStatus(instanceID, status, sessionID, event string, turnIDs .
 	prior.Status, prior.SessionID, prior.Event = status, sessionID, event
 	prior.Timestamp = time.Now().Unix()
 	prior.DoneStatus, prior.DoneSummary, prior.TranscriptPath, prior.Cwd = "", "", "", ""
+	if done != nil && completed {
+		prior.DoneStatus, prior.DoneSummary = done.Status, done.Summary
+	}
 	writeHookStatusFile(instanceID, prior, false)
 }
 

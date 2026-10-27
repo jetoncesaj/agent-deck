@@ -559,6 +559,14 @@ type Instance struct {
 	// so existing sessions are unaffected on upgrade.
 	IdleTimeoutSecs int64 `json:"idle_timeout_secs,omitempty"`
 
+	// WaitTimeout is the per-session wait timer (ASK-119): after a prompt
+	// with a safe default has waited this long, the recommended option is
+	// taken (wait_timer.go). "" uses [sessions] wait_timeout, "off" disables
+	// it, else a Go duration of at least a minute ("5m"). CLI: `session set
+	// <id> wait-timeout <dur|off>` (empty clears). Persisted in the tool_data
+	// extras zone.
+	WaitTimeout string `json:"wait_timeout,omitempty"`
+
 	// Favorite marks the session as a favourite: `session set <id> favorite
 	// true|false`, shown in list/show JSON. Persisted in the tool_data extras
 	// zone (favorite_persist.go).
@@ -2393,7 +2401,7 @@ func (i *Instance) updateStatus(pass *StatusUpdatePass, syncMetadata bool) error
 	// COLD LOAD: CLI doesn't run StatusFileWatcher, so hookStatus is always empty.
 	// Read the hook file from disk once to give CLI the same fast path as the TUI.
 	if i.hookStatus == "" && HookStatusTool(i.Tool) {
-		if hs := readHookStatusFile(i.ID); hs != nil && !i.codexHookFromForeignThread(hs) {
+		if hs := readHookStatusForPass(i.ID); hs != nil && !i.codexHookFromForeignThread(hs) {
 			i.hookStatus = hs.Status
 			i.hookEvent = hs.Event
 			i.hookLastUpdate = hs.UpdatedAt

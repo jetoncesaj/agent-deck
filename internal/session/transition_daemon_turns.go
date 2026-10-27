@@ -39,6 +39,12 @@ import (
 // commit; in both cases the caller leaves its bookkeeping untouched so the
 // next poll retries.
 func (d *TransitionDaemon) emitTurn(profile string, inst *Instance, byID map[string]*Instance, from, to string, ts time.Time, observedFlip bool) (TransitionNotificationEvent, bool) {
+	return d.emitTurnWith(profile, inst, byID, from, to, ts, observedFlip, nil)
+}
+
+// emitTurnWith is emitTurn for a pi child whose verdict the caller already
+// derived from one status snapshot (nil: read one here).
+func (d *TransitionDaemon) emitTurnWith(profile string, inst *Instance, byID map[string]*Instance, from, to string, ts time.Time, observedFlip bool, pi *piTurnVerdict) (TransitionNotificationEvent, bool) {
 	event := TransitionNotificationEvent{
 		ChildSessionID: inst.ID,
 		ChildTitle:     inst.Title,
@@ -57,6 +63,15 @@ func (d *TransitionDaemon) emitTurn(profile string, inst *Instance, byID map[str
 	if classified && facts.Pending {
 		return event, false
 	}
+	var piv piTurnVerdict
+	if pi != nil {
+		piv = *pi
+	} else if strings.EqualFold(strings.TrimSpace(inst.Tool), "pi") {
+		piv = piVerdict(inst, d.statusSnapshot(inst.ID), to, time.Now())
+	}
+	if piv.Awaiting {
+		return event, false // the run's settle has not landed; the next poll retries
+	}
 	// ASK-92: an idle auto-compaction grows the transcript and may flip the
 	// pane, but no one started a turn and the child said nothing. A flip into
 	// error still reaches the parent the legacy way.
@@ -68,7 +83,11 @@ func (d *TransitionDaemon) emitTurn(profile string, inst *Instance, byID map[str
 		// the notifier's dedup is the bound.
 		classified = false
 	}
-	event.LastOutputHash = transitionEventOutputHash(inst)
+	if strings.EqualFold(strings.TrimSpace(inst.Tool), "pi") {
+		event.LastOutputHash = piv.Signal // from the one snapshot; "" is the fallback
+	} else {
+		event.LastOutputHash = transitionEventOutputHash(inst)
+	}
 	statsParent := statsParentFor(inst)
 	selfConductor := isSelfSuppressedConductor(inst)
 

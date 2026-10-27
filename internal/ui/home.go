@@ -32,6 +32,7 @@ import (
 	"github.com/asheshgoplani/agent-deck/internal/logging"
 	"github.com/asheshgoplani/agent-deck/internal/menudata"
 	"github.com/asheshgoplani/agent-deck/internal/optiming"
+	"github.com/asheshgoplani/agent-deck/internal/provider"
 	"github.com/asheshgoplani/agent-deck/internal/safego"
 	"github.com/asheshgoplani/agent-deck/internal/session"
 	"github.com/asheshgoplani/agent-deck/internal/statedb"
@@ -289,6 +290,7 @@ type Home struct {
 	contextPager         *ContextPager         // Full-context inspector overlay (what the agent is being sent)
 	worktreeFinishDialog *WorktreeFinishDialog // For finishing worktree sessions (merge + cleanup)
 	feedbackDialog       *FeedbackDialog       // For in-app feedback popup (Phase 2)
+	askDialog            *AskDialog            // ASK-117: owner answers an agent's ask secret|choice|text
 	reportDialog         *ReportDialog         // "Report a problem" form: bug/idea -> GitHub issue (internal/issuereport)
 	telemetryDialog      *TelemetryDialog      // One-time opt-in telemetry consent prompt (TELEMETRY.md)
 	tel                  homeTelemetry         // Opt-in telemetry sampler and TUI lifetime (home_telemetry.go)
@@ -462,6 +464,11 @@ type Home struct {
 	// only runs every ~60s.
 	idleTimeoutWatcher  *session.IdleTimeoutWatcher
 	idleTimeoutLastTick atomic.Int64 // UnixNano
+
+	// waitTimer answers prompts that waited past their session's wait
+	// timeout (ASK-119); ticked once per status sweep by the primary TUI
+	// (tickWaitTimer).
+	waitTimer *session.WaitTimer
 
 	// PERFORMANCE: Worker pool for output-driven status updates (Priority 2)
 	// Caps the number of goroutines spawned for %output events from control pipes
@@ -1036,6 +1043,9 @@ type Home struct {
 	// pendingRemoteCreate holds the remote create whose path the server
 	// reported missing, while the create-directory confirmation is open.
 	pendingRemoteCreate *remoteCreateDirNeededMsg
+	// sandboxProvisioner replaces provider.Provision for a "new sandbox"
+	// Where pick (tests stub it); nil uses defaultSandboxProvisioner.
+	sandboxProvisioner func(ctx context.Context, opts provider.ProvisionOptions) (*provider.Provisioned, error)
 	// insertKeySender is the persistent dispatch path opened on
 	// enterInsertMode and closed on exitInsertMode (#1102 perf fix +
 	// remote support). Local sessions get a tmux.KeySender (control-mode
@@ -1441,6 +1451,7 @@ func buildRemoteAttachRequest(remoteName, sessionID, openAs string) (terminal.At
 			Profile:       rc.GetProfile(),
 			Transport:     rc.GetTransport(),
 			MoshServer:    rc.MoshServer,
+			SSHConfig:     rc.SSHConfig,
 		},
 	}, true
 }
@@ -2012,6 +2023,11 @@ func (h *Home) backgroundStatusUpdate() {
 		}
 	}
 
+	// ASK-119: prompts that waited past their session's wait timeout take
+	// their recommended option. After the status loop, so it reads this
+	// sweep's statuses.
+	h.tickWaitTimer(instances)
+
 	// Always sync notification bar - must check for signal file (Ctrl+b N acknowledgments)
 	// even when no status changes occurred
 	notifStart := time.Now()
@@ -2140,6 +2156,9 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Execute final shutdown logic after splash delay
 		return h, h.performFinalShutdown(bool(msg))
 
+	case askPollMsg, askSeenMsg, askDeliveredMsg, askCancelledMsg, askTickMsg, askCloseMsg:
+		return h, h.askDialog.HandleMsg(msg, func() bool { return h.canShowAsk(time.Now()) })
+
 	case tea.BlurMsg:
 		// The terminal reports motion only while the pointer is inside its
 		// window, so once focus leaves there is no event coming that would
@@ -2184,6 +2203,11 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, h.fetchSelectedPreview()
 
 	case tea.MouseMsg:
+		// The ask modal owns the screen: no click may attach a session or
+		// focus a pane while it is open.
+		if h.askDialog.IsVisible() {
+			return h, nil
+		}
 		if h.telemetryDialog != nil && h.telemetryDialog.IsVisible() {
 			return h, nil
 		}
@@ -3579,6 +3603,12 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return h, nil
 
+	case sandboxProgressMsg:
+		return h, h.handleSandboxProgress(msg)
+
+	case sandboxProvisionedMsg:
+		return h, h.handleSandboxProvisioned(msg)
+
 	case remoteCreateDirNeededMsg:
 		// The server refused the path; ask before retrying with --create-dir
 		// so a typo never silently creates a directory on the remote.
@@ -4775,7 +4805,7 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// restarted (update --check --json).
 		h.maybeWriteHeartbeat(now)
 
-		cmds := []tea.Cmd{h.tick(), previewCmd, remoteFetchCmd, remoteLatencyCmd, h.syncRemotePaneWatch(), updateCheckCmd, binaryProbeCmd, autoRestartCmd}
+		cmds := []tea.Cmd{h.tick(), previewCmd, remoteFetchCmd, remoteLatencyCmd, h.syncRemotePaneWatch(), updateCheckCmd, binaryProbeCmd, autoRestartCmd, h.askDialog.PollCmd(now)}
 		if h.fullRepaint {
 			cmds = append(cmds, tea.ClearScreen)
 		}
@@ -4792,6 +4822,11 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		// Track user activity for adaptive status updates
 		h.lastUserInputTime = time.Now()
+		// The ask modal takes every key first: they never reach the
+		// keypress log, telemetry, insert mode or any pane (ASK-117).
+		if h.askDialog.IsVisible() {
+			return h, h.askDialog.Update(msg)
+		}
 		h.tel.sampler.KeyPressed()
 		// Hands on the keyboard means the mouse is not about to grab anything,
 		// and the terminal stops reporting motion the instant the pointer
@@ -6294,6 +6329,7 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		conductors := h.activeConductorSessions()
 		suggestedParentID := h.suggestConductorParent()
 		h.newDialog.ShowInGroup(groupPath, groupName, defaultPath, conductors, suggestedParentID)
+		h.newDialog.SetWhereChoices(newDialogWhereChoicesFromConfig())
 		return h, nil
 
 	case "N":

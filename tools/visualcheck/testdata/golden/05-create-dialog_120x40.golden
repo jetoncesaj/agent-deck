@@ -1,6 +1,5 @@
 
 
-
                  ╭────────────────────────────────────────────────────────────────────────────────────╮
                  │                                                                                    │
                  │                                                                                    │
@@ -9,7 +8,7 @@
                  │      in group: alpha                                                               │
                  │                                                                                    │
                  │    ▶ Name:                                                                         │
-                 │      > session-name                                                                │
+                 │      > opencode-idle                                                               │
                  │                                                                                    │
                  │      Command:                                                                      │
                  │        shell     claude     gemini     opencode     opencode2     codex            │
@@ -22,6 +21,8 @@
                  │      Path:                                                                         │
                  │      > /tmp/vc-<tmp>                               │
                  │                                                                                    │
+                 │      Where: this machine                                                           │
+                 │                                                                                    │
                  │      [ ] Create in worktree                                                        │
                  │      [ ] Run in Docker sandbox                                                     │
                  │                                                                                    │
@@ -30,7 +31,7 @@
                  │      [ Create session ]                                                            │
                  │                                                                                    │
                  │                                                                                    │
-                 │    Tab next │ ↑↓ navigate │ Enter next │ ^S create │ Esc cancel                    │
+                 │    Tab next │ ↑↓ navigate │ Enter create │ Esc cancel                              │
                  │                                                                                    │
                  │                                                                                    │
                  ╰────────────────────────────────────────────────────────────────────────────────────╯

@@ -129,7 +129,12 @@ func noteRestartToken(i *Instance, now time.Time) {
 		}
 	}
 	if tok.Transcript == "" {
-		if tok.Signal = transitionEventOutputHash(i); tok.Signal == "" {
+		if tok.Signal = transitionEventOutputHash(i); tok.Signal == "" && strings.EqualFold(strings.TrimSpace(i.Tool), "pi") {
+			// A pi child restarted again before any new run: its file is the last
+			// restart's session_start, which names no run.
+			tok.Signal = piCarriedRunSignal(restartHookStatus(i.ID))
+		}
+		if tok.Signal == "" {
 			return
 		}
 	}
@@ -311,6 +316,10 @@ func (d *TransitionDaemon) judgeRestart(id, transcript, signal string, pane func
 	if !ok || ts.Before(tok.At) {
 		return tok, restartNews, ""
 	}
+	hs := restartHookStatus(id)
+	if piRunReplay(signal, hs) {
+		return tok, restartNews, "" // a carried run replayed, not the boot: the token stays
+	}
 	substate := pane()
 	isError := normalizeStatusString(to) == string(StatusError)
 	if banner := paneErrorText(substate); banner != "" && (isError || normalizeStatusString(to) == string(StatusWaiting) || normalizeStatusString(to) == string(StatusIdle)) {
@@ -323,7 +332,6 @@ func (d *TransitionDaemon) judgeRestart(id, transcript, signal string, pane func
 		return tok, restartUnsettled, "" // the restart is still running; the boot timeout bounds this
 	}
 	newAlive := restartPIDAlive(tok.NewPID)
-	hs := restartHookStatus(id)
 	// The restart's kill is what ends the old Claude, so its SessionEnd can be
 	// written just after the restart recorded the new process; the hook file
 	// stamps whole seconds. A SessionEnd up to its resolution later is the old
@@ -371,7 +379,7 @@ func (d *TransitionDaemon) judgeRestart(id, transcript, signal string, pane func
 		}
 		return tok, restartNewError, "Restarted, but the resumed session reports an error."
 	case string(StatusWaiting), string(StatusIdle):
-		if newAlive && !newEnd && restartTranscriptUnchanged(tok, transcript, signal) {
+		if newAlive && !newEnd && restartTurnUnchanged(tok, transcript, signal, hs) {
 			d.spendRestartToken(id)
 			return tok, restartBoot, ""
 		}
@@ -393,6 +401,68 @@ func restartTranscriptUnchanged(tok restartToken, transcript, signal string) boo
 		return tok.Transcript == transcript && noTurnSince(tok.Transcript, tok.Offset)
 	}
 	return signal != "" && signal == tok.Signal
+}
+
+// restartTurnUnchanged is restartTranscriptUnchanged with the child's hook file.
+// A settles-capable pi child's token holds its last run's key. The kill writes
+// nothing (pi writes no session_shutdown under respawn-pane -k), and the resumed
+// pi's session_start, the only lifecycle write, rebuilds the file with no run:
+// the flip carries no signal, and the file names the runs before it only in the
+// list it carries forward. The newest entry being the token's run is the
+// same "no new turn".
+func restartTurnUnchanged(tok restartToken, transcript, signal string, hs *HookStatus) bool {
+	if restartTranscriptUnchanged(tok, transcript, signal) {
+		return true
+	}
+	if signal != "" || tok.Transcript != "" || !strings.HasPrefix(tok.Signal, "pi-run:") {
+		return false
+	}
+	return piCarriedRunSignal(hs) == tok.Signal
+}
+
+// piCarriedRunSignal is the key of the newest run a settles-capable pi child's
+// file carries forward when the file itself names no run (a session_start or
+// session_shutdown rebuilt it).
+func piCarriedRunSignal(hs *HookStatus) string {
+	if hs == nil || (hs.Event != "session_start" && hs.Event != "session_shutdown") ||
+		(hs.Settles && hs.PiRunID != "") || hs.PiOrphanCount == 0 {
+		return ""
+	}
+	return piRunSignal(hs.PiOrphanRuns[hs.PiOrphanCount-1].RunID)
+}
+
+// piRunReplay reports whether signal is a run the pi child's file carries
+// forward (recordOrphanedPiRuns replaying it): a run from before the boot, so it
+// is not the boot and must not spend the token. That holds for the token's own
+// run too: a replay of it is that run's own record, which the parent has not had
+// yet (a run whose replay is stamped after the token: finished between the
+// token and the kill, or cut short by it, with the daemon down across its end).
+func piRunReplay(signal string, hs *HookStatus) bool {
+	if !strings.HasPrefix(signal, "pi-run:") || hs == nil {
+		return false
+	}
+	for _, o := range hs.PiOrphanRuns[:hs.PiOrphanCount] {
+		if piRunSignal(o.RunID) == signal {
+			return true
+		}
+	}
+	return false
+}
+
+// piBackAtPrompt reports whether the resumed pi wrote its session_start after
+// the token: it is at its prompt, whatever the status reads (past the hook
+// window the status comes from the pane). Under the kill the old pi writes
+// nothing after the token (no session_shutdown), and the resumed pi can write
+// before the restart records it, so the bound is the token, not the spawn record.
+func piBackAtPrompt(tok restartToken, hs *HookStatus) bool {
+	if hs == nil || hs.Event != "session_start" {
+		return false
+	}
+	at := hs.ReceivedAt
+	if at.IsZero() {
+		at = hs.UpdatedAt.Add(time.Second) // whole seconds: written no later than this
+	}
+	return at.After(tok.At)
 }
 
 // restartBootRecord is the notifier's own check (#2792) for a producer that
@@ -739,7 +809,8 @@ func (d *TransitionDaemon) sweepRestartTokens(profile string, byID map[string]*I
 			case string(StatusWaiting), string(StatusIdle):
 				continue // back at its prompt
 			case string(StatusRunning):
-				if !restartTranscriptUnchanged(tok, inst.GetJSONLPath(), transitionEventOutputHash(inst)) {
+				if hs := restartHookStatus(id); piBackAtPrompt(tok, hs) ||
+					!restartTurnUnchanged(tok, inst.GetJSONLPath(), transitionEventOutputHash(inst), hs) {
 					continue // back, and already on a new turn
 				}
 			}

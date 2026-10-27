@@ -9,7 +9,7 @@
 
 [![GitHub Stars](https://img.shields.io/github/stars/asheshgoplani/agent-deck?style=for-the-badge&logo=github&color=yellow&labelColor=1a1b26)](https://github.com/asheshgoplani/agent-deck/stargazers)
 [![Downloads](https://img.shields.io/github/downloads/asheshgoplani/agent-deck/total?style=for-the-badge&logo=github&color=bb9af7&labelColor=1a1b26)](https://github.com/asheshgoplani/agent-deck/releases)
-[![Go Version](https://img.shields.io/badge/Go-1.26.9-00ADD8?style=for-the-badge&logo=go&labelColor=1a1b26)](https://go.dev)
+[![Go Version](https://img.shields.io/badge/Go-1.26.10-00ADD8?style=for-the-badge&logo=go&labelColor=1a1b26)](https://go.dev)
 [![License](https://img.shields.io/badge/License-MIT-9ece6a?style=for-the-badge&labelColor=1a1b26)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20WSL-7aa2f7?style=for-the-badge&labelColor=1a1b26)](https://github.com/asheshgoplani/agent-deck)
 [![Latest Release](https://img.shields.io/github/v/release/asheshgoplani/agent-deck?style=for-the-badge&color=e0af68&labelColor=1a1b26)](https://github.com/asheshgoplani/agent-deck/releases)
@@ -32,7 +32,7 @@ Beyond one-off PRs, we're looking for 1-2 regular co-maintainers: people who wan
 To get started:
 
 1. Read [CONTRIBUTING.md](CONTRIBUTING.md): how the pipeline works, what makes a PR land fast, and the house rules.
-2. Contributing with an AI agent? Point it at [.github/INTAKE.md](.github/INTAKE.md), the machine-readable intake spec — or the [agent-deck-contributor skill](.github/skills/agent-deck-contributor), which walks an agent (or you) through building, testing, and shaping a clean PR.
+2. Contributing with an AI agent? Point it at [.github/INTAKE.md](.github/INTAKE.md), the machine-readable intake spec — or the [contributor workflow](skills/agent-deck/references/contributing.md) in the agent-deck skill, which walks an agent (or you) through building, testing, and shaping a clean PR.
 3. Comment on an issue before starting work so we can tell you if someone (human or agent) is already on it.
 4. Look for issues labeled [`good first issue`](https://github.com/asheshgoplani/agent-deck/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22): curated to be small and self-contained.
 
@@ -116,7 +116,7 @@ agent-deck skill attach my-proj docs --source pool --restart # Attach skill + re
 agent-deck web                    # Start web UI on http://127.0.0.1:8420
 ```
 
-> **⚠️ Changed in v1.9.55, extended after v1.16.5:** in the new-session dialog (`n`), **Enter advances to the next field** on every row — Name, Tool, Model, Reasoning effort, Path, checkboxes and each Claude Options row — and only the trailing **`[ Create session ]`** button (or **Ctrl+S from any field**) creates the session, so walking the form with Enter never launches a session before you have chosen the model, path or options. `↓`/`Space` open the model list. The dialog also remembers your last-used tool. Restore the old Enter-creates-from-any-row behavior with `[ui].new_session_enter_advances = false`.
+> **⚠️ Changed again after v1.16.32:** in the new-session dialog (`n`), **Enter creates the session from any row** with what is filled in: this folder, your last-used tool, the selected group, and the folder name when Name is empty. `n` then `Enter` is the whole common case; `N` on the home screen creates without the dialog. Tab/↓ reach the optional rows, `↓`/`Space` open the model list, and a wrong required field takes focus with the reason. To walk the form with Enter down to the **`[ Create session ]`** button instead, set `[ui].new_session_enter_advances = true`; **Ctrl+S** creates from any field in both modes.
 
 ### Key Shortcuts
 
@@ -276,6 +276,16 @@ A conductor's proactive `/clear` (`clear_on_compact`) only arms on an establishe
 For a new one-shot session, use `agent-deck launch . -c claude --account <name>`.
 Run `agent-deck accounts` (or `agent-deck accounts --json`) to list named slots
 configured under `[profiles.<name>.claude].config_dir`.
+
+To put every *new* Claude session on one slot until you change it (say, while
+another account is near its weekly limit), set a default account:
+`agent-deck config set claude.default_account work`, or Settings (`S`) →
+Claude → Default account. The New Session dialog then starts on
+`work (default)`, and `add` / `launch` without `--account` use it too.
+Existing sessions keep their account, a group or conductor `config_dir` still
+wins, and this machine's default never travels to a remote (a remote server
+applies its own `default_account`, if it has one). See
+[`default_account`](skills/agent-deck/references/config-reference.md#claude-section).
 
 `agent-deck session switch-account <session> <account>` moves an existing session to another Claude account — **conversation included**. The session stops, its conversation file is migrated into the target account's config dir (copy-only, with a destination backup and size verification), the account is set, and the session restarts with `--resume`. `session set <session> account <name>` auto-migrates too. Claude Code may key one working directory under several project directories (the path as typed, its macOS `/private` form, its realpath); every copy of the conversation under those keys in both accounts is considered, the newest by last event wins (tie: longest), it is installed under every key in the target, each copy it replaces is backed up next to it, and a newer target copy is never overwritten. The receipt names the chosen copy; `--json` lists every candidate under `transcript`.
 
@@ -1127,6 +1137,8 @@ agent-deck feedback idea --title "Report a problem from the menu bar"
 
 Anonymous usage data (tools and features used, session counts and lengths, active hours, error types, version and OS; never prompts, paths, titles or names) is shared with the maintainer via PostHog EU **only after you say yes** to the one-time TUI question; `agent-deck telemetry preview` shows exactly what would be sent, and `agent-deck telemetry off` or `DO_NOT_TRACK=1` turns it off. Details and the full field list: [TELEMETRY.md](TELEMETRY.md). A separate `install.tick` uses a fresh daily nonce to count reporting installs, checked by the interactive TUI after the consent day; retries reuse that nonce. Owner installs suppress it with `[telemetry] owner = true` or `AGENTDECK_TELEMETRY_OWNER=1`. Status and TUI Settings show the last acknowledged tick day. Schema 3 asks existing opt-ins to accept the updated disclosure; schema-2 refusals remain final.
 
+The website counts page views with PostHog EU, cookieless (in-memory only) and not at all when your browser sends Do Not Track or Global Privacy Control; see [TELEMETRY.md](TELEMETRY.md#website).
+
 ```bash
 agent-deck telemetry status      # on/off, why, and what is waiting in the local spool
 agent-deck telemetry preview     # the exact request bodies the next upload would send
@@ -1294,6 +1306,7 @@ there as markdown.
 | [Skills](documentation/SKILLS.md) | User-level vs pool skills, authoring, attach/detach, when to use which tier |
 | [Watchdog](documentation/WATCHDOG.md) | Optional Python daemon that auto-restarts critical sessions and nudges stuck children |
 | [Watchers](documentation/WATCHERS.md) | Event-forwarding framework: doorbell model, built-in adapters, custom watchers, gotchas |
+| [Plug in any machine](docs/PLUG-IN-ANY-MACHINE.md) | Sandbox providers: make a fresh machine (Docker, your VMs) per session, the JSON contract, security |
 
 **References** — drill into specifics:
 
@@ -1325,17 +1338,15 @@ Then ask: *"How do I set up MCP pooling?"*
 **Option 2: OpenCode** (has built-in Claude skill compatibility)
 ```bash
 # Create skill directory
-mkdir -p ~/.claude/skills/agent-deck/references ~/.claude/skills/agent-deck/recall
+mkdir -p ~/.claude/skills/agent-deck/references
 
 # Download skill and references
 curl -sL https://raw.githubusercontent.com/asheshgoplani/agent-deck/main/skills/agent-deck/SKILL.md \
   > ~/.claude/skills/agent-deck/SKILL.md
-for f in cli-reference config-reference tui-reference troubleshooting capabilities session-communication sub-agents conductors session-workflows autonomy gotchas goal sandbox self-improvement; do
+for f in cli-reference config-reference tui-reference troubleshooting capabilities session-communication sub-agents conductors session-workflows autonomy gotchas goal sandbox self-improvement fleet session-share recall retro retro-metrics repro repro-contract; do
   curl -sL "https://raw.githubusercontent.com/asheshgoplani/agent-deck/main/skills/agent-deck/references/${f}.md" \
     > ~/.claude/skills/agent-deck/references/${f}.md
 done
-curl -sL https://raw.githubusercontent.com/asheshgoplani/agent-deck/main/skills/agent-deck/recall/SKILL.md \
-  > ~/.claude/skills/agent-deck/recall/SKILL.md
 ```
 OpenCode will auto-discover the skill from `~/.claude/skills/`.
 
