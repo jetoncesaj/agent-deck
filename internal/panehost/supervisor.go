@@ -238,6 +238,12 @@ func Run(ctx context.Context, o Options) (int, error) {
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
 
+	// Count the clients before the provider hears anything, so an attach
+	// that lands while it starts up is still announced.
+	attached := -1
+	if o.Probe != nil {
+		attached = o.Probe().Attached
+	}
 	cols, rows := winsize(fd)
 	send(fmt.Sprintf("hello %d", ProtocolVersion))
 	send(fmt.Sprintf("resize %d %d", cols, rows))
@@ -248,11 +254,6 @@ func Run(ctx context.Context, o Options) (int, error) {
 	var fields map[string]string
 	if o.Fields != nil {
 		fields = o.Fields()
-	}
-	attached := -1
-	if o.Probe != nil {
-		pr := o.Probe()
-		attached = pr.Attached
 	}
 	fieldsTick := time.NewTicker(o.FieldsPeriod)
 	defer fieldsTick.Stop()

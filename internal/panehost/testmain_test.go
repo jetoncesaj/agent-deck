@@ -34,13 +34,28 @@ func runTestHost() int {
 	socket := os.Getenv("PANEHOST_TEST_SOCKET")
 	session := os.Getenv("PANEHOST_TEST_SESSION")
 	agent := os.Getenv("PANEHOST_TEST_AGENT")
+	self := os.Getenv("TMUX_PANE")
+	// Inside its own private test server, $TMUX names the very socket the
+	// helper targets with -L, which the default-socket guard reads as "the
+	// server this test was launched from" and refuses. The helper always
+	// passes -L, so $TMUX is not needed.
+	_ = os.Unsetenv("TMUX")
 	run := SocketRunner(socket)
 	ctlLog := os.Getenv("PANEHOST_TEST_CONTROL_LOG")
 	code, err := Run(context.Background(), Options{
-		Command:     os.Getenv("PANEHOST_TEST_CMD"),
-		Env:         append(os.Environ(), "AGENTDECK_PANE_CONTROL_FD=3"),
-		TTY:         os.Stdin,
-		Probe:       func() Probe { return ProbeAgent(run, agent) },
+		Command: os.Getenv("PANEHOST_TEST_CMD"),
+		Env:     append(os.Environ(), "AGENTDECK_PANE_CONTROL_FD=3"),
+		TTY:     os.Stdin,
+		Probe: func() Probe {
+			p := ProbeAgent(run, agent)
+			if l := os.Getenv("PANEHOST_TEST_PROBE_LOG"); l != "" {
+				if f, err := os.OpenFile(l, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+					fmt.Fprintf(f, "%+v\n", p)
+					_ = f.Close()
+				}
+			}
+			return p
+		},
 		ProbePeriod: 100 * time.Millisecond,
 		Layout:      func() { ApplyLayout(run, session) },
 		Grace:       500 * time.Millisecond,
@@ -58,6 +73,6 @@ func runTestHost() int {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 	}
-	Cleanup(run, session, os.Getenv("TMUX_PANE"))
+	Cleanup(run, session, self)
 	return code
 }
