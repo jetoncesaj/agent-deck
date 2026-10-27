@@ -400,19 +400,20 @@ func ApplyLayoutAs(run Runner, tmuxSession, self string) LayoutDecision {
 	return d
 }
 
-// ProbeAgent looks at the agent pane: gone (closed or dead) and how many
-// clients are attached to its session.
+// ProbeAgent looks at the agent pane in one tmux call: gone (closed or
+// dead), how many clients are attached to its session, and the window width.
 func ProbeAgent(run Runner, agentPane string) Probe {
-	out, err := run("display-message", "-p", "-t", agentPane, "#{pane_id}|#{pane_dead}|#{session_attached}")
+	out, err := run("display-message", "-p", "-t", agentPane, "#{pane_id}|#{pane_dead}|#{session_attached}|#{window_width}")
 	if err != nil {
 		return Probe{Gone: true}
 	}
-	f := strings.SplitN(strings.TrimSpace(out), "|", 3)
-	if len(f) < 3 || f[0] != agentPane {
+	f := strings.SplitN(strings.TrimSpace(out), "|", 4)
+	if len(f) < 4 || f[0] != agentPane {
 		return Probe{Gone: true}
 	}
 	n, _ := strconv.Atoi(f[2])
-	return Probe{Gone: f[1] == "1", Attached: n}
+	w, _ := strconv.Atoi(f[3])
+	return Probe{Gone: f[1] == "1", Attached: n, WindowWidth: w}
 }
 
 // Signal sends sig to the host process of every host pane in the session.

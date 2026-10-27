@@ -32,6 +32,9 @@ type Probe struct {
 	Gone bool
 	// Attached is the number of clients attached to the session.
 	Attached int
+	// WindowWidth is the agent window's width; a change triggers Layout.
+	// 0 means unknown (Layout then runs on every probe).
+	WindowWidth int
 }
 
 // Options configures Run.
@@ -240,9 +243,10 @@ func Run(ctx context.Context, o Options) (int, error) {
 
 	// Count the clients before the provider hears anything, so an attach
 	// that lands while it starts up is still announced.
-	attached := -1
+	attached, width := -1, 0
 	if o.Probe != nil {
-		attached = o.Probe().Attached
+		pr := o.Probe()
+		attached, width = pr.Attached, pr.WindowWidth
 	}
 	cols, rows := winsize(fd)
 	send(fmt.Sprintf("hello %d", ProtocolVersion))
@@ -319,8 +323,14 @@ loop:
 					send("attach")
 				}
 				attached = pr.Attached
-			}
-			if o.Layout != nil {
+				// A hidden (zoomed-away) pane gets no SIGWINCH when the
+				// window widens again, so the window width is watched
+				// here; layout runs only when it moved.
+				if o.Layout != nil && (pr.WindowWidth == 0 || pr.WindowWidth != width) {
+					o.Layout()
+				}
+				width = pr.WindowWidth
+			} else if o.Layout != nil {
 				o.Layout()
 			}
 		}

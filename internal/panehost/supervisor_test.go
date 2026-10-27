@@ -266,3 +266,38 @@ func TestRunRejectsMissingCommandOrTTY(t *testing.T) {
 		t.Fatal("Run without a command must fail")
 	}
 }
+
+// The probe drives layout only when the window width moved (start and
+// SIGWINCH always do), so an idle pane costs one tmux call per period.
+func TestRunLayoutOnlyWhenWidthMoves(t *testing.T) {
+	_, tty := testTTY(t)
+	var width, layouts, probes atomic.Int32
+	width.Store(160)
+	sigs := make(chan os.Signal, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = Run(context.Background(), Options{
+			Command:     "exec sleep 60",
+			TTY:         tty,
+			Signals:     sigs,
+			Probe:       func() Probe { probes.Add(1); return Probe{WindowWidth: int(width.Load())} },
+			ProbePeriod: 20 * time.Millisecond,
+			Layout:      func() { layouts.Add(1) },
+			Grace:       200 * time.Millisecond,
+		})
+	}()
+	waitFor(t, "several probes", 3*time.Second, func() bool { return probes.Load() >= 6 })
+	if n := layouts.Load(); n != 1 {
+		t.Fatalf("layout ran %d times with a steady width, want 1 (start)", n)
+	}
+	width.Store(70)
+	waitFor(t, "layout after width change", 3*time.Second, func() bool { return layouts.Load() == 2 })
+	before := probes.Load()
+	waitFor(t, "more probes", 3*time.Second, func() bool { return probes.Load() >= before+4 })
+	if n := layouts.Load(); n != 2 {
+		t.Fatalf("layout ran %d times, want 2", n)
+	}
+	sigs <- syscall.SIGTERM
+	<-done
+}
