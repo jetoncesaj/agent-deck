@@ -180,15 +180,10 @@ type PaneTarget struct {
 	Conductor string
 }
 
-// paneItemRef returns the session's item ref (any tracker's reference).
-//
-// TODO(fork/phase1 merge): the item field is added on fork/phase1 (`session
-// set <id> item <ref>`). Once that branch is merged, return d.Item here; it is
-// the only line to change, and the env, the refresh on change and
-// `pane status` all pick it up.
+// paneItemRef returns the session's item ref (any tracker's reference, set
+// with `session set <id> item <ref>`); "" when none is set.
 func paneItemRef(d *InstanceData) string {
-	_ = d
-	return ""
+	return d.ItemRef
 }
 
 // panePRNumber returns the session's PR number. Agent Deck stores no PR for

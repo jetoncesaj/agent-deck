@@ -156,6 +156,22 @@ func TestPaneTargetEnvWorkerChainAndAbsentValues(t *testing.T) {
 	}
 }
 
+func TestPaneTargetCarriesItemRef(t *testing.T) {
+	fleet := paneFleet()
+	for _, d := range fleet {
+		if d.ID == "w1" {
+			d.ItemRef = "ONAZA-13"
+		}
+	}
+	tgt, _ := BuildPaneTarget("personal", "w1", fleet, "")
+	if got := envMap(tgt.Env())["AGENTDECK_PANE_ITEM"]; got != "ONAZA-13" {
+		t.Errorf("AGENTDECK_PANE_ITEM = %q, want ONAZA-13", got)
+	}
+	if got := PaneFields("w1", fleet)["item"]; got != "ONAZA-13" {
+		t.Errorf("PaneFields item = %q, want ONAZA-13", got)
+	}
+}
+
 func gitT(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
