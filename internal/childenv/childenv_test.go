@@ -72,3 +72,15 @@ func TestWithoutClaudeJobDir(t *testing.T) {
 	}
 	assert.Contains(t, out, "TELEGRAM_KEEP=1", "tmux env keeps every other var")
 }
+
+func TestForPaneProvider_DropsIdentityAndStalePaneVars(t *testing.T) {
+	t.Setenv("AGENTDECK_INSTANCE_ID", "agent-1")
+	t.Setenv("AGENTDECK_PANE_ITEM", "stale")
+	t.Setenv("PANE_TEST_KEEP", "yes")
+	env := ForPaneProvider([]string{"AGENTDECK_INSTANCE_ID"}, "AGENTDECK_PANE_", []string{"AGENTDECK_PANE_SESSION_ID=agent-1"})
+	joined := "\n" + strings.Join(env, "\n") + "\n"
+	assert.NotContains(t, joined, "\nAGENTDECK_INSTANCE_ID=")
+	assert.NotContains(t, joined, "AGENTDECK_PANE_ITEM=")
+	assert.Contains(t, joined, "\nPANE_TEST_KEEP=yes\n")
+	assert.Equal(t, "AGENTDECK_PANE_SESSION_ID=agent-1", env[len(env)-1])
+}

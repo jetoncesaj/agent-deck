@@ -411,6 +411,9 @@ func main() {
 		return
 	}
 	applyProfileFlag(profile)
+	// Side panes configured for a session open when it starts or restarts,
+	// whichever surface (CLI, TUI, web) starts it.
+	session.PaneAfterStart = paneAutoOpen(profile)
 	// File export must stay read-only, including when telemetry is opted in.
 	if len(args) > 0 {
 		switch args[0] {
@@ -544,6 +547,9 @@ func main() {
 			return
 		case "session":
 			handleSession(profile, args[1:])
+			return
+		case "pane":
+			handlePane(profile, args[1:])
 			return
 		case "fleet":
 			handleFleet(profile, args[1:])
@@ -1594,6 +1600,8 @@ var storeRootQuietCommands = map[string]bool{
 	"help":          true,
 	"--help":        true,
 	"-h":            true,
+	// The side-pane host prints to the pane it draws in.
+	"pane": true,
 }
 
 // commandRegistry lists every token that main()'s dispatch switch treats
@@ -1604,7 +1612,7 @@ var storeRootQuietCommands = map[string]bool{
 var commandRegistry = map[string]bool{
 	"add": true, "accounts": true, "harness": true, "limits": true, "doctor": true, "perf": true, "health": true, "list": true, "ls": true, "remove": true, "rm": true,
 	"rename": true, "mv": true, "status": true, "profile": true, "update": true,
-	"session": true, "fleet": true, "mcp": true, "plugin": true, "skill": true, "mcp-proxy": true,
+	"session": true, "pane": true, "fleet": true, "mcp": true, "plugin": true, "skill": true, "mcp-proxy": true,
 	"group": true, "try": true, "launch": true, "conductor": true,
 	"agents": true, "agent": true,
 	"telegram-doctor": true, "watcher": true, "openclaw": true, "oc": true,
@@ -4697,6 +4705,7 @@ func printHelp() {
 	fmt.Println("  rename, mv       Rename a session")
 	fmt.Println("  status           Show session status summary")
 	fmt.Println("  session          Manage session lifecycle")
+	fmt.Println("  pane             Side panes beside a session (open, close, status)")
 	fmt.Println("  open <file|url>  Show a page in the Mac app Browser panel [--session <id|title>]")
 	fmt.Println("  browser <op>     Drive the session's Mac app Browser: open, tabs, close, click, type, read, shot")
 	fmt.Println("  file bundle      Export a page folder as a size-capped tar [--session <id>]")

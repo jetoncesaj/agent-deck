@@ -298,3 +298,19 @@ func TestDeflagged_LeavesOtherValuesAlone(t *testing.T) {
 		}
 	}
 }
+
+func TestNotifyText_DeliversFreeFormAndFallsThrough(t *testing.T) {
+	failing := &fakeBackend{name: "cmux", available: true, err: errors.New("closed")}
+	ok := &fakeBackend{name: "osascript", available: true}
+	got := NewWithBackends(failing, ok).NotifyText("w1", "PR 12 can land")
+	if got != "osascript" || ok.gotTitle != "w1" || ok.gotBody != "PR 12 can land" || !ok.ctxDeadline {
+		t.Fatalf("NotifyText = %q, delivered %q/%q deadline=%v", got, ok.gotTitle, ok.gotBody, ok.ctxDeadline)
+	}
+	if got := NewWithBackends(ok).NotifyText("", "x"); got != "osascript" || ok.gotTitle != "agent-deck" {
+		t.Fatalf("empty title: backend %q title %q", got, ok.gotTitle)
+	}
+	var nilNotifier *Notifier
+	if got := nilNotifier.NotifyText("a", "b"); got != "" {
+		t.Fatalf("nil notifier = %q", got)
+	}
+}

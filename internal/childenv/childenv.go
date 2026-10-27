@@ -89,3 +89,31 @@ func WithoutClaudeJobDir() []string {
 func ForLaunch(childConfigDir string) []string {
 	return FilterEnv(os.Environ(), childConfigDir)
 }
+
+// ForPaneProvider returns the env for a side-pane provider: the current
+// process environment without the named variables and without any variable
+// starting with dropPrefix, then extra appended. A provider runs in a pane
+// of the agent's tmux session, so it inherits that session's identity
+// variables (AGENTDECK_INSTANCE_ID and the tool session ids); it is not the
+// agent, and a CLI it runs must not act as that session.
+func ForPaneProvider(drop []string, dropPrefix string, extra []string) []string {
+	env := os.Environ()
+	out := make([]string, 0, len(env)+len(extra))
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		if dropPrefix != "" && strings.HasPrefix(name, dropPrefix) {
+			continue
+		}
+		skip := false
+		for _, d := range drop {
+			if name == d {
+				skip = true
+				break
+			}
+		}
+		if !skip {
+			out = append(out, kv)
+		}
+	}
+	return append(out, extra...)
+}

@@ -450,6 +450,9 @@ func (i *Instance) restartRecorded(env map[string]string, sf telemetry.Surface) 
 		if queued {
 			i.takeOffQueueAfterStart()
 		}
+		// A restart that recreated the tmux session lost its side panes;
+		// one that respawned the agent pane kept them (Open is a no-op).
+		runPaneAfterStart(i)
 	}
 	return err
 }

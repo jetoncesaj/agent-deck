@@ -1852,6 +1852,7 @@ func (i *Instance) Start() (startErr error) {
 	}
 
 	i.recoverConductorAfterSpawn()
+	runPaneAfterStart(i)
 	return nil
 }
 
@@ -2201,6 +2202,8 @@ func (i *Instance) StartWithMessage(message string) (startErr error) {
 	if IsCodexCompatible(i.Tool) {
 		go i.detectCodexSessionAsync()
 	}
+
+	runPaneAfterStart(i)
 
 	// Send message synchronously (CLI will wait). Codex may already carry the
 	// prompt as a launch argument, in which case there is nothing to type.
