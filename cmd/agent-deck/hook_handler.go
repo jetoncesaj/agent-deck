@@ -219,6 +219,10 @@ type hookStatusFile struct {
 	// binds the entry's Hermes session. omitempty keeps other agents' files
 	// unchanged.
 	Platform string `json:"platform,omitempty"`
+	// Source is the SessionStart payload's source (startup, resume, clear,
+	// compact); empty for every other event. omitempty keeps other events'
+	// files unchanged.
+	Source string `json:"source,omitempty"`
 
 	// hermesOwnedSessionID is never written to the status file: it is the
 	// Hermes session id this event records as the entry's own (#2582), saved
@@ -426,7 +430,7 @@ func handleHookHandlerReceivedAt(receivedAt time.Time) {
 	if isStopHookEvent(payload.HookEventName) {
 		scan = detectDoneSentinel(data)
 	}
-	writeHookStatusReceivedAtPlatform(instanceID, status, sessionID, payload.HookEventName, payload.Cwd, hookPayloadPlatform(payload), scan, receivedAt)
+	writeHookStatusReceivedAtSource(instanceID, status, sessionID, payload.HookEventName, payload.Cwd, hookPayloadPlatform(payload), sessionStartSource(payload), scan, receivedAt)
 	if payload.HookEventName == "PreToolUse" {
 		// This high-frequency edge only publishes activity. Lifecycle hooks
 		// still own metadata reconciliation, costs, and Recall indexing.
@@ -620,6 +624,25 @@ func writeHookStatusReceivedAt(instanceID, status, sessionID, event, cwd string,
 // writeHookStatusReceivedAtPlatform also records the payload's platform
 // (Hermes extra.platform), used to keep delegate events from binding.
 func writeHookStatusReceivedAtPlatform(instanceID, status, sessionID, event, cwd, platform string, scan doneScanResult, receivedAt time.Time) {
+	writeHookStatusReceivedAtSource(instanceID, status, sessionID, event, cwd, platform, "", scan, receivedAt)
+}
+
+// sessionStartSource returns the SessionStart payload's source ("startup",
+// "resume", "clear", "compact"), or "" for every other event. Only Claude's
+// SessionStart uses the field this way; pi and others send "source" with a
+// different meaning on other events.
+func sessionStartSource(p hookPayload) string {
+	if normalizeHookEventKey(p.HookEventName) != "sessionstart" {
+		return ""
+	}
+	return strings.TrimSpace(p.Source)
+}
+
+// writeHookStatusReceivedAtSource also records a SessionStart's source. A
+// SessionStart with source "clear" or "compact" names the conversation that
+// replaced the pane's previous one; it is kept in the rollover marker
+// (session.WriteClaudeRolloverMarker) so the binding can follow /clear.
+func writeHookStatusReceivedAtSource(instanceID, status, sessionID, event, cwd, platform, source string, scan doneScanResult, receivedAt time.Time) {
 	if instanceID == "" || status == "" {
 		return
 	}
@@ -643,6 +666,7 @@ func writeHookStatusReceivedAtPlatform(instanceID, status, sessionID, event, cwd
 		Timestamp: time.Now().Unix(),
 		Cwd:       strings.TrimSpace(cwd),
 		Platform:  platform,
+		Source:    source,
 	}
 	if os.Getenv("AGENTDECK_TOOL") == "hermes" && session.HermesHookRecordsOwnSession(event, platform, sessionID) {
 		statusFile.hermesOwnedSessionID = sessionID
@@ -736,6 +760,13 @@ func writeHookStatusFile(instanceID string, statusFile hookStatusFile, mutateAnc
 	}
 	if mutateAnchor && isTerminalHookEvent(statusFile.Event) {
 		session.ClearHookSessionAnchor(instanceID)
+	}
+	// Same critical section: a SessionStart with source clear/compact records
+	// the conversation that replaced this pane's previous one, so the binding
+	// follows /clear; any other SessionStart (startup, resume) removes the
+	// marker so it can never steer a later rebind.
+	if mutateAnchor && normalizeHookEventKey(statusFile.Event) == "sessionstart" {
+		session.WriteClaudeRolloverMarker(instanceID, statusFile.SessionID, statusFile.Source)
 	}
 	// Same critical section: a Hermes process from an earlier launch was
 	// rejected by the generation check above, so it cannot rebind the entry

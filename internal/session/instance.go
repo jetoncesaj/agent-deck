@@ -278,6 +278,10 @@ type Instance struct {
 	// Claude Code integration
 	ClaudeSessionID  string    `json:"claude_session_id,omitempty"`
 	ClaudeDetectedAt time.Time `json:"claude_detected_at,omitempty"`
+	// PreviousClaudeSessionID is the conversation id a hook rebind replaced
+	// (for example the pre-/clear conversation) during this process. It is
+	// persisted only as tool_data.claude_previous_session_id; not reloaded.
+	PreviousClaudeSessionID string `json:"-"`
 	// claudeSessionIDsFromDiskScan records every conversation id this
 	// instance ever obtained from an mtime-based DISK SCAN rather than from a
 	// source identifying THIS session (own tmux env, own hook payload, an

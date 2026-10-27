@@ -294,7 +294,16 @@ func (i *Instance) UpdateHookStatus(status *HookStatus) {
 		// is significantly newer than the current's (clearRebindMtimeGrace),
 		// treat it as a user-initiated new session and rebind regardless
 		// of size.
-		if sessionHasConversationData(i, i.ClaudeSessionID) {
+		//
+		// The mtime gap is only a proxy. When this pane's own Claude
+		// process declared the candidate through SessionStart with source
+		// "clear" or "compact" (the rollover marker the hook handler writes
+		// under the generation lock), the user-initiated new conversation
+		// is stated outright, so the proxy is not consulted. A flap never
+		// carries that declaration, and every guard above (terminal event,
+		// foreign cwd, no conversation data) has already run.
+		rolloverSource, rollover := i.claudeRolloverDeclared(sessionID)
+		if !rollover && sessionHasConversationData(i, i.ClaudeSessionID) {
 			currentSize := sessionConversationByteSize(i, i.ClaudeSessionID)
 			candidateSize := sessionConversationByteSize(i, sessionID)
 			if candidateSize <= currentSize {
@@ -318,7 +327,11 @@ func (i *Instance) UpdateHookStatus(status *HookStatus) {
 				}
 			}
 		}
-		i.bindClaudeSessionFromHook(sessionID, hookSource, status.Event, "rebind")
+		reason := ""
+		if rollover {
+			reason = "session_start_" + rolloverSource
+		}
+		i.bindClaudeSessionFromHookReason(sessionID, hookSource, status.Event, "rebind", reason)
 	case IsCodexCompatible(i.Tool):
 		if sessionID == i.CodexSessionID {
 			return
@@ -923,16 +936,32 @@ func (i *Instance) RefreshLiveSessionIDs() {
 // capture-resume pattern picks it up. `action` is "bind" (cold start)
 // or "rebind" (replacing an existing ID).
 func (i *Instance) bindClaudeSessionFromHook(sessionID, hookSource, hookEvent, action string) {
+	i.bindClaudeSessionFromHookReason(sessionID, hookSource, hookEvent, action, "")
+}
+
+// bindClaudeSessionFromHookReason is bindClaudeSessionFromHook with a
+// lifecycle reason. A rebind also records the id it replaced: in memory as
+// PreviousClaudeSessionID and in tool_data as claude_previous_session_id (an
+// untyped key, which MergeToolDataExtras carries across full saves), next to
+// the lifecycle log's old_id, so a /clear can be traced back to the
+// conversation it left.
+func (i *Instance) bindClaudeSessionFromHookReason(sessionID, hookSource, hookEvent, action, reason string) {
 	sessionLog.Debug("claude_session_update_from_hook",
 		slog.String("old_id", i.ClaudeSessionID),
 		slog.String("new_id", sessionID),
 		slog.String("event", hookEvent),
+		slog.String("reason", reason),
 	)
 	_ = WriteSessionIDLifecycleEvent(SessionIDLifecycleEvent{
 		InstanceID: i.ID, Tool: i.Tool, Action: action,
 		Source: hookSource, OldID: i.ClaudeSessionID, NewID: sessionID,
-		HookEvent: hookEvent,
+		HookEvent: hookEvent, Reason: reason,
 	})
+	previousID := ""
+	if i.ClaudeSessionID != "" && i.ClaudeSessionID != sessionID {
+		previousID = i.ClaudeSessionID
+		i.PreviousClaudeSessionID = previousID
+	}
 	i.ClaudeSessionID = sessionID
 	// #1815: a hook payload correlated to this instance identifies THIS
 	// session, so the id is verified ownership.
@@ -966,6 +995,9 @@ func (i *Instance) bindClaudeSessionFromHook(sessionID, hookSource, hookEvent, a
 	// later peer reload that observes the new ID will short-circuit at
 	// the `sessionID == i.ClaudeSessionID` check in UpdateHookStatus.
 	err := i.withOwningStateDB(func(db *statedb.StateDB) error {
+		if previousID != "" {
+			return db.WriteClaudeSessionRebinding(i.ID, sessionID, previousID, i.ClaudeDetectedAt)
+		}
 		return db.WriteClaudeSessionBinding(i.ID, sessionID, i.ClaudeDetectedAt)
 	})
 	switch {

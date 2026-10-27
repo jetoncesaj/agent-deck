@@ -1597,6 +1597,43 @@ func (s *StateDB) WriteClaudeSessionBinding(id, sessionID string, detectedAt tim
 	return s.writeHarnessSessionBinding(id, sessionID, "claude", detectedAt)
 }
 
+// WriteClaudeSessionRebinding is WriteClaudeSessionBinding for a rebind that
+// replaced previousID (a /clear, a compaction rollover, a hook-observed new
+// conversation). The replaced id is kept in tool_data as
+// claude_previous_session_id in the same json_set, so the record can always
+// be traced to the conversation it left. The key is not part of the typed
+// tool_data schema, so MergeToolDataExtras carries it across full saves.
+func (s *StateDB) WriteClaudeSessionRebinding(id, sessionID, previousID string, detectedAt time.Time) error {
+	if previousID == "" || previousID == sessionID {
+		return s.WriteClaudeSessionBinding(id, sessionID, detectedAt)
+	}
+	return withBusyRetry(func() error {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+		if _, err := tx.Exec(
+			`UPDATE instances
+			   SET tool_data = json_set(
+			         COALESCE(tool_data, '{}'),
+			         '$.claude_session_id', ?,
+			         '$.claude_detected_at', ?,
+			         '$.claude_previous_session_id', ?)
+			 WHERE id = ?`,
+			sessionID, detectedAt.Unix(), previousID, id,
+		); err != nil {
+			return err
+		}
+		if sessionID != "" {
+			if err := upsertSessionLink(tx, id, "claude", sessionID, "", true, detectedAt); err != nil {
+				return err
+			}
+		}
+		return tx.Commit()
+	})
+}
+
 // writeHarnessSessionBinding is the shared body of the Claude, Codex and
 // Gemini binding writers: one json_set on tool_data plus the session_links
 // row, in one transaction so a link never exists without its binding.
