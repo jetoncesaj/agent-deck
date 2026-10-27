@@ -168,6 +168,11 @@ type UserConfig struct {
 	// config_dir = "~/.claude-my-group"
 	Groups map[string]GroupSettings `toml:"groups,omitempty"`
 
+	// Pane configures the side-pane host: a provider command Agent Deck
+	// runs beside a session (see PaneSettings). Per-group specs live under
+	// [groups."<path>".pane], per-session ones under [pane.sessions].
+	Pane PaneSettings `toml:"pane,omitempty"`
+
 	// GroupDefaults holds defaults applied to NEWLY-created groups only.
 	// Existing groups (loaded from state.db) are never affected.
 	GroupDefaults GroupDefaultsSettings `toml:"group_defaults,omitempty"`
@@ -1314,6 +1319,9 @@ type GroupSettings struct {
 	// group (issue #2260): "none", "primer", or "full". Walks ancestor
 	// groups like the other per-group settings — see GetGroupContextLevel.
 	ContextLevel string `toml:"context_level,omitempty"`
+	// Pane names the side-pane command for sessions in this group (and its
+	// subgroups). Empty: no pane. See PaneSpec.
+	Pane PaneSpec `toml:"pane,omitempty"`
 }
 
 // GroupDefaultsSettings carries [group_defaults] — defaults stamped onto new

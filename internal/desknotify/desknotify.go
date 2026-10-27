@@ -242,6 +242,30 @@ func (nt *Notifier) Notify(n Notification) string {
 	return ""
 }
 
+// NotifyText delivers a free-form title/body through the first available
+// backend, like Notify, for callers whose message is not a status change
+// (a side-pane provider's notify request). Returns the backend name or "".
+func (nt *Notifier) NotifyText(title, body string) string {
+	if nt == nil {
+		return ""
+	}
+	if strings.TrimSpace(title) == "" {
+		title = "agent-deck"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), dispatchTimeout)
+	defer cancel()
+	for _, b := range nt.backends {
+		if b == nil || !b.Available() {
+			continue
+		}
+		if err := b.Notify(ctx, title, body); err != nil {
+			continue
+		}
+		return b.Name()
+	}
+	return ""
+}
+
 // ShouldNotify reports whether a status merits interrupting the operator.
 //
 // Deliberately narrower than the set the parent-routing path uses. "idle" is
