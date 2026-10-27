@@ -32,10 +32,10 @@ type PaneSettings struct {
 	Width string `toml:"width,omitempty"`
 	// NarrowCols: a window narrower than this zooms the agent pane and hides
 	// the host panes (a phone through the web app). Default 100.
-	NarrowCols int `toml:"narrow_cols,omitempty"`
+	NarrowCols int `toml:"narrow_cols,omitzero"`
 	// MinCols: a host column narrower than this is hidden the same way.
 	// Default 30.
-	MinCols int `toml:"min_cols,omitempty"`
+	MinCols int `toml:"min_cols,omitzero"`
 	// AutoOpen opens the configured panes when a session starts or restarts.
 	// Default true (nil).
 	AutoOpen *bool `toml:"auto_open,omitempty"`

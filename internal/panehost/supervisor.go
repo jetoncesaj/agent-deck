@@ -145,6 +145,8 @@ func Run(ctx context.Context, o Options) (int, error) {
 		return -1, fmt.Errorf("creating pane control pipe: %w", err)
 	}
 
+	// #nosec G204 -- the provider command comes from the user's own config
+	// or CLI flag; running it is the feature.
 	cmd := exec.Command("/bin/sh", "-c", o.Command)
 	cmd.Dir = o.Dir
 	cmd.Env = o.Env
