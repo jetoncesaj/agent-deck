@@ -48,6 +48,8 @@ type SessionRow struct {
 	ID                string         `json:"id"`
 	ParentSessionID   string         `json:"parent_session_id,omitempty"`
 	ParentProjectPath string         `json:"parent_project_path,omitempty"`
+	ParentID          string         `json:"parent_id" doc:"parent session id; empty when none"`
+	ParentTitle       string         `json:"parent_title" doc:"parent session title; empty when none or the parent is not in this listing"`
 	Title             string         `json:"title"`
 	Path              string         `json:"path"`
 	Group             string         `json:"group"`
@@ -139,10 +141,13 @@ func sessionList(ctx context.Context, in SessionListIn) (SessionListOut, error) 
 
 // staticSessionRow fills the stored fields only; no tmux or pane access.
 func staticSessionRow(inst *session.Instance, instances []*session.Instance, profile string, transcripts map[*session.Instance]string) SessionRow {
+	parentID, parentTitle := session.ParentRef(inst, instances)
 	return SessionRow{
 		ID:                inst.ID,
 		ParentSessionID:   inst.ParentSessionID,
 		ParentProjectPath: parentProjectPath(inst, instances),
+		ParentID:          parentID,
+		ParentTitle:       parentTitle,
 		Title:             inst.Title,
 		Path:              inst.ProjectPath,
 		Group:             inst.GroupPath,

@@ -1,6 +1,8 @@
 [
   {
     "id": "golden-sess-1",
+    "parent_id": "",
+    "parent_title": "",
     "title": "claude idle",
     "path": "/repo/app",
     "group": "my-sessions",
@@ -19,6 +21,8 @@
   },
   {
     "id": "golden-sess-2",
+    "parent_id": "",
+    "parent_title": "",
     "title": "codex running",
     "path": "/repo/app",
     "group": "my-sessions",
@@ -38,6 +42,8 @@
   },
   {
     "id": "golden-sess-3",
+    "parent_id": "",
+    "parent_title": "",
     "title": "gemini waiting",
     "path": "/repo/backend",
     "group": "backend",
@@ -56,6 +62,8 @@
   },
   {
     "id": "golden-sess-4",
+    "parent_id": "",
+    "parent_title": "",
     "title": "shell error",
     "path": "/repo/backend",
     "group": "backend",
@@ -73,6 +81,8 @@
   },
   {
     "id": "golden-sess-5",
+    "parent_id": "",
+    "parent_title": "",
     "title": "claude stopped",
     "path": "/repo/backend/api",
     "group": "backend/api",
@@ -90,6 +100,8 @@
   },
   {
     "id": "golden-sess-6",
+    "parent_id": "",
+    "parent_title": "",
     "title": "codex queued",
     "path": "/repo/backend/api",
     "group": "backend/api",

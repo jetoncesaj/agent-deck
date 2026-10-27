@@ -135,6 +135,7 @@ func handleSessionShow(profile string, args []string) {
 	// consumes), not the raw sort_order, which ties at 0 on every
 	// launch-appended row.
 	groupTree := session.NewGroupTreeWithGroups(instances, groupsData)
+	parentID, parentTitle := session.ParentRef(inst, instances)
 	jsonData := map[string]interface{}{
 		"id":                   inst.ID,
 		"title":                inst.Title,
@@ -145,6 +146,8 @@ func handleSessionShow(profile string, args []string) {
 		"pin":                  string(inst.Pin),
 		"parent_session_id":    inst.ParentSessionID,
 		"parent_project_path":  inst.ParentProjectPath,
+		"parent_id":            parentID,
+		"parent_title":         parentTitle,
 		"no_transition_notify": inst.NoTransitionNotify,
 		"title_locked":         inst.TitleLocked,
 		"tool":                 inst.Tool,

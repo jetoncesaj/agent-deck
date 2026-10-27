@@ -137,10 +137,18 @@
           "description": "live",
           "type": "string"
         },
+        "parent_id": {
+          "description": "parent session id; empty when none",
+          "type": "string"
+        },
         "parent_project_path": {
           "type": "string"
         },
         "parent_session_id": {
+          "type": "string"
+        },
+        "parent_title": {
+          "description": "parent session title; empty when none or the parent is not in this listing",
           "type": "string"
         },
         "path": {
@@ -208,6 +216,8 @@
         "created_at",
         "group",
         "id",
+        "parent_id",
+        "parent_title",
         "path",
         "profile",
         "status",

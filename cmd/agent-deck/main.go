@@ -3159,9 +3159,13 @@ func buildListJSON(profileName string, instances []*session.Instance, cachedStat
 		cached = cachedStatus[0]
 	}
 	type sessionJSON struct {
-		ID                string    `json:"id"`
-		ParentSessionID   string    `json:"parent_session_id,omitempty"`
-		ParentProjectPath string    `json:"parent_project_path,omitempty"`
+		ID                string `json:"id"`
+		ParentSessionID   string `json:"parent_session_id,omitempty"`
+		ParentProjectPath string `json:"parent_project_path,omitempty"`
+		// ParentID and ParentTitle are always present ("" when none) so a
+		// pane can build the parent chain without guessing from titles.
+		ParentID          string    `json:"parent_id"`
+		ParentTitle       string    `json:"parent_title"`
 		Title             string    `json:"title"`
 		Path              string    `json:"path"`
 		Group             string    `json:"group"`
@@ -3234,10 +3238,13 @@ func buildListJSON(profileName string, instances []*session.Instance, cachedStat
 			substate = string(inst.HistoricalSubstate())
 		}
 		parentProjectPath := listParentProjectPath(inst, instances)
+		parentID, parentTitle := session.ParentRef(inst, instances)
 		sj := sessionJSON{
 			ID:                inst.ID,
 			ParentSessionID:   inst.ParentSessionID,
 			ParentProjectPath: parentProjectPath,
+			ParentID:          parentID,
+			ParentTitle:       parentTitle,
 			Title:             inst.Title,
 			Path:              inst.ProjectPath,
 			Group:             inst.GroupPath,
@@ -3311,6 +3318,8 @@ func handleListAllProfiles(jsonOutput, includeSuperseded bool) {
 			ID                string    `json:"id"`
 			ParentSessionID   string    `json:"parent_session_id,omitempty"`
 			ParentProjectPath string    `json:"parent_project_path,omitempty"`
+			ParentID          string    `json:"parent_id"`
+			ParentTitle       string    `json:"parent_title"`
 			Title             string    `json:"title"`
 			Path              string    `json:"path"`
 			Group             string    `json:"group"`
@@ -3343,10 +3352,13 @@ func handleListAllProfiles(jsonOutput, includeSuperseded bool) {
 			}
 			transcripts := session.ListedTranscriptPaths(instances)
 			for _, inst := range instances {
+				parentID, parentTitle := session.ParentRef(inst, instances)
 				allSessions = append(allSessions, sessionJSON{
 					ID:                inst.ID,
 					ParentSessionID:   inst.ParentSessionID,
 					ParentProjectPath: listParentProjectPath(inst, instances),
+					ParentID:          parentID,
+					ParentTitle:       parentTitle,
 					Title:             inst.Title,
 					Path:              inst.ProjectPath,
 					Group:             inst.GroupPath,

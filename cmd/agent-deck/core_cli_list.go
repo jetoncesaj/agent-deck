@@ -134,6 +134,8 @@ type allProfilesSessionJSON struct {
 	ID                string    `json:"id"`
 	ParentSessionID   string    `json:"parent_session_id,omitempty"`
 	ParentProjectPath string    `json:"parent_project_path,omitempty"`
+	ParentID          string    `json:"parent_id"`
+	ParentTitle       string    `json:"parent_title"`
 	Title             string    `json:"title"`
 	Path              string    `json:"path"`
 	Group             string    `json:"group"`
@@ -165,6 +167,8 @@ func renderListAllProfiles(listed core.SessionListOut, jsonOutput bool) {
 					ID:                row.ID,
 					ParentSessionID:   row.ParentSessionID,
 					ParentProjectPath: row.ParentProjectPath,
+					ParentID:          row.ParentID,
+					ParentTitle:       row.ParentTitle,
 					Title:             row.Title,
 					Path:              row.Path,
 					Group:             row.Group,
