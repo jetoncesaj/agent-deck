@@ -42,6 +42,8 @@ func handleInbox(profile string, args []string) {
 			printInboxExportUsage(os.Stdout)
 		case "writer-status":
 			printInboxWriterStatusUsage(os.Stdout)
+		case "post":
+			printInboxPostUsage(os.Stdout)
 		default:
 			printInboxUsage(os.Stdout)
 		}
@@ -62,6 +64,7 @@ func printInboxUsage(w io.Writer) {
 	fmt.Fprintln(w, "       agent-deck inbox peek [--json] [<session-id>|self]")
 	fmt.Fprintln(w, "       agent-deck inbox stats [--json] [--all] [<session-id>|self]")
 	fmt.Fprintln(w, "       agent-deck inbox dead-letter <list|show|retry|purge>")
+	fmt.Fprintln(w, "       agent-deck inbox post [--project <name>] [--dry-run] [--json] < envelope.json")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Drain pending completion events from the parent's durable outbox.")
 	fmt.Fprintln(w, "The `drain` form (issue #1225) preserves distinct turns per child and")
@@ -75,6 +78,9 @@ func printInboxUsage(w io.Writer) {
 	fmt.Fprintln(w, "cannot be told apart from a host where nothing has been watching.")
 	fmt.Fprintln(w, "The `dead-letter` family safely inspects, retries, or purges terminal")
 	fmt.Fprintln(w, "delivery failures; run `agent-deck inbox dead-letter help` for details.")
+	fmt.Fprintln(w, "The `post` form is the planner doorbell: one event envelope on stdin is")
+	fmt.Fprintln(w, "delivered, labelled PLANNER EVENT, to the session linked to its item or the")
+	fmt.Fprintln(w, "project's conductor; run `agent-deck inbox post --help` for details.")
 }
 
 func printInboxExportUsage(w io.Writer) {
@@ -214,6 +220,9 @@ func runInboxWithProfile(stdout io.Writer, args []string, explicitProfile string
 	}
 	if len(args) > 0 && args[0] == "peek" {
 		return runInboxPeek(stdout, args[1:], explicitProfile)
+	}
+	if len(args) > 0 && args[0] == "post" {
+		return runInboxPost(os.Stdin, stdout, args[1:], explicitProfile)
 	}
 
 	fs := flag.NewFlagSet("inbox", flag.ContinueOnError)
