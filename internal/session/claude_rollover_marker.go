@@ -122,3 +122,39 @@ func (i *Instance) claudeRolloverDeclared(candidate string) (string, bool) {
 	}
 	return source, true
 }
+
+// PendingClaudeRollover returns the conversation this instance's own Claude
+// process declared, through SessionStart(clear|compact), as the successor of
+// the bound one, while the binding has not followed it yet.
+//
+// The binding cannot follow at SessionStart time: the successor's transcript
+// holds no conversation data until its first turn, and the
+// no-conversation-data guard (foreign `claude -p` ephemerals) rightly rejects
+// it until then. When that first turn is a `session send --wait`, the send's
+// own prompt is what gives the successor data, so the guarded hook rebind
+// lands during the send, after the send chose the pre-/clear transcript to
+// read its turn from. A sender reads the declared successor for that turn
+// instead. Nothing is persisted here: UpdateHookStatus, with every guard,
+// still decides the binding.
+//
+// Never followed: no marker or a non-rollover source, the bound id itself, an
+// id that is not a single transcript file name, a session whose transcript is
+// on another host, and an id that any other instance in peers is bound to.
+func (i *Instance) PendingClaudeRollover(peers []*Instance) (string, bool) {
+	if i == nil || !IsClaudeCompatible(i.Tool) || !i.TranscriptIsResolvableLocally() {
+		return "", false
+	}
+	id, _ := readClaudeRolloverMarker(i.ID)
+	if id == "" || id == i.ClaudeSessionID || strings.ContainsAny(id, "*?[") {
+		return "", false
+	}
+	if _, err := conversationPathComponent(id + ".jsonl"); err != nil {
+		return "", false
+	}
+	for _, p := range peers {
+		if p != nil && p.ID != i.ID && p.ClaudeSessionID == id {
+			return "", false
+		}
+	}
+	return id, true
+}

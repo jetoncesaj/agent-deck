@@ -457,6 +457,10 @@ func handleSessionSend(profile string, args []string) {
 	sentAt := time.Now()
 	var turnPath string
 	var turnCursor int64
+	// rolloverID is the conversation a /clear (or compaction) declared that
+	// the binding has not caught up with yet; when set, the turn is read from
+	// that conversation's transcript only (followClaudeRollover).
+	var rolloverID string
 	// trackTurn: every Claude send with a real prompt reads its own turn
 	// record out of the transcript — as the verification loop's authoritative
 	// submission signal, and as the reply binding for --wait/--stream.
@@ -469,6 +473,7 @@ func handleSessionSend(profile string, args []string) {
 			session.NoteClaudeSessionIDFromOwnPane(inst)
 			inst.ClaudeDetectedAt = time.Now()
 		}
+		rolloverID = followClaudeRollover(inst, instances)
 		var pathErr error
 		turnPath, pathErr = inst.GetJSONLPathChecked(instances)
 		if pathErr != nil {
@@ -553,7 +558,7 @@ func handleSessionSend(profile string, args []string) {
 	// submission signal; it is only available when the transcript existed
 	// before the send (position is the proof).
 	if pathKnownBeforeSend {
-		turnQuery := session.TurnQuery{Path: turnPath, Prompt: message, Cursor: turnCursor}
+		turnQuery := session.TurnQuery{Path: turnPath, Prompt: message, Cursor: turnCursor, SessionID: rolloverID}
 		tun.retry.turnAdvanced = func() bool { return session.TurnAdvanced(turnQuery) }
 	}
 	if acceptanceGuard != nil {
@@ -804,12 +809,12 @@ func handleSessionSend(profile string, args []string) {
 	if useTurnIdentity {
 		if turnPath == "" {
 			var err error
-			turnPath, err = awaitTranscriptPath(inst, sessionRef, profile, instances, waitDeadline)
+			turnPath, rolloverID, err = awaitTranscriptPath(inst, sessionRef, profile, instances, waitDeadline)
 			if err != nil {
 				failSessionSend(out, *stream, err.Error(), recordSendEventOnce)
 			}
 		}
-		turnQuery = session.TurnQuery{Path: turnPath, Prompt: message, Cursor: turnCursor}
+		turnQuery = session.TurnQuery{Path: turnPath, Prompt: message, Cursor: turnCursor, SessionID: rolloverID}
 		if !pathKnownBeforeSend {
 			turnQuery.NotBefore = sentAt
 		}
@@ -1082,15 +1087,34 @@ func emitStreamErrorEvent(msg string) {
 	fmt.Println(string(b))
 }
 
+// followClaudeRollover points inst, in memory only, at the conversation its
+// own Claude process declared through SessionStart(clear|compact) while the
+// binding still names the pre-/clear one, and returns that id ("" when there
+// is nothing to follow). The guarded hook rebind commits the new id only once
+// the successor has conversation data, which for a send right after /clear is
+// this send's own prompt, so without this the turn would be awaited in the
+// abandoned transcript until --timeout. See Instance.PendingClaudeRollover
+// for what is never followed; nothing here is saved.
+func followClaudeRollover(inst *session.Instance, peers []*session.Instance) string {
+	id, ok := inst.PendingClaudeRollover(peers)
+	if !ok {
+		return ""
+	}
+	inst.ClaudeSessionID = id
+	return id
+}
+
 // awaitTranscriptPath resolves the Claude transcript path for a session whose
 // transcript did not exist before the send. Claude writes the file after the
 // first assistant chunk, so this polls until deadline, refreshing the session
-// from the DB in case the TUI or hooks learned the session ID meanwhile.
-// A colliding transcript (#1400) is refused, never polled.
-func awaitTranscriptPath(inst *session.Instance, sessionRef, profile string, peers []*session.Instance, deadline time.Time) (string, error) {
+// from the DB in case the TUI or hooks learned the session ID meanwhile, and
+// following a /clear the binding has not caught up with (the returned
+// rolloverID, "" otherwise). A colliding transcript (#1400) is refused, never
+// polled.
+func awaitTranscriptPath(inst *session.Instance, sessionRef, profile string, peers []*session.Instance, deadline time.Time) (path, rolloverID string, err error) {
 	resolved := inst
 	if !resolved.TranscriptIsResolvableLocally() {
-		return "", fmt.Errorf("session runs on %s; its Claude transcript is not on this machine", resolved.SSHHost)
+		return "", "", fmt.Errorf("session runs on %s; its Claude transcript is not on this machine", resolved.SSHHost)
 	}
 	for {
 		if fresh := resolved.GetSessionIDFromTmux(); fresh != "" && fresh != resolved.ClaudeSessionID {
@@ -1098,15 +1122,16 @@ func awaitTranscriptPath(inst *session.Instance, sessionRef, profile string, pee
 			session.NoteClaudeSessionIDFromOwnPane(resolved)
 			resolved.ClaudeDetectedAt = time.Now()
 		}
+		rolloverID = followClaudeRollover(resolved, peers)
 		p, err := resolved.GetJSONLPathChecked(peers)
 		if err != nil {
-			return "", fmt.Errorf("refusing a colliding transcript: %w", err)
+			return "", "", fmt.Errorf("refusing a colliding transcript: %w", err)
 		}
 		if p != "" {
-			return p, nil
+			return p, rolloverID, nil
 		}
 		if !time.Now().Before(deadline) {
-			return "", fmt.Errorf("session transcript not found before the --timeout deadline (session id=%q)", resolved.ClaudeSessionID)
+			return "", "", fmt.Errorf("session transcript not found before the --timeout deadline (session id=%q)", resolved.ClaudeSessionID)
 		}
 		if _, freshInstances, _, loadErr := loadSessionData(profile); loadErr == nil {
 			peers = freshInstances

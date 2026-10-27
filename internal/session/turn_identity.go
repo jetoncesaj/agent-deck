@@ -35,11 +35,17 @@ type TurnIdentity struct {
 // or malformed timestamp is rejected rather than trusted. Heartbeats, inbox
 // nudges and retries resend identical text, so the older copy of the same
 // prompt must never become this send's identity (PR #2043 round 2, #1978).
+//
+// SessionID, when set, also requires the record to carry exactly that
+// sessionId. A send that reads the successor a /clear declared (see
+// Instance.PendingClaudeRollover) sets it, so only a turn Claude stamped with
+// the declared conversation is adopted; a record without one is rejected.
 type TurnQuery struct {
 	Path      string
 	Prompt    string
 	Cursor    int64
 	NotBefore time.Time
+	SessionID string
 }
 
 // ErrTurnResponseIncomplete is returned by AwaitTurnResponse together with the
@@ -192,6 +198,9 @@ func scanTurn(q TurnQuery, cursor int64, matchPrompt bool) (TurnIdentity, int64,
 		}
 		body, human := humanPrompt(rec)
 		if !human || (matchPrompt && !promptMatches(body, want)) || recordTooOld(rec, q.NotBefore) {
+			continue
+		}
+		if q.SessionID != "" && rec.SessionID != q.SessionID {
 			continue
 		}
 		if rec.UUID == "" {

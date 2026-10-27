@@ -147,3 +147,65 @@ func TestClaudeRolloverMarker_Lifecycle(t *testing.T) {
 		t.Fatalf("a startup SessionStart must remove the marker, still %q", id)
 	}
 }
+
+// A send right after /clear: SessionStart(clear) declared the successor, but
+// its transcript has no data yet, so the guarded rebind has not committed.
+// The sender follows the declaration for its turn; the rebind itself still
+// waits for the hook path.
+func TestPendingClaudeRollover_FollowsDeclaredSuccessorOnly(t *testing.T) {
+	fx := setupClearRollover(t)
+	pendingID := "e7b13f82-0000-4000-8000-0000000000aa"
+	peer := NewInstanceWithTool("peer", fx.inst.ProjectPath, "claude")
+	peer.ClaudeSessionID = "0f0f0f0f-0000-4000-8000-0000000000bb"
+	peers := []*Instance{fx.inst, peer}
+
+	if id, ok := fx.inst.PendingClaudeRollover(peers); ok {
+		t.Fatalf("no marker: followed %q", id)
+	}
+
+	WriteClaudeRolloverMarker(fx.inst.ID, pendingID, "clear")
+	if id, ok := fx.inst.PendingClaudeRollover(peers); !ok || id != pendingID {
+		t.Fatalf("PendingClaudeRollover = %q,%v; want the declared %q", id, ok, pendingID)
+	}
+	if fx.inst.ClaudeSessionID != fx.oldID {
+		t.Fatalf("PendingClaudeRollover must not rebind; ClaudeSessionID = %q", fx.inst.ClaudeSessionID)
+	}
+
+	// Unrelated ids are never followed.
+	for name, write := range map[string]func(){
+		"bound id itself":          func() { WriteClaudeRolloverMarker(fx.inst.ID, fx.oldID, "clear") },
+		"id bound to another peer": func() { WriteClaudeRolloverMarker(fx.inst.ID, peer.ClaudeSessionID, "clear") },
+		"not a file name":          func() { WriteClaudeRolloverMarker(fx.inst.ID, "../"+pendingID, "clear") },
+		"glob id":                  func() { WriteClaudeRolloverMarker(fx.inst.ID, "e7b13f82-*", "clear") },
+		"resume clears it":         func() { WriteClaudeRolloverMarker(fx.inst.ID, pendingID, "resume") },
+		"another instance's marker": func() {
+			ClearClaudeRolloverMarker(fx.inst.ID)
+			WriteClaudeRolloverMarker(peer.ID, pendingID, "clear")
+		},
+	} {
+		write()
+		if id, ok := fx.inst.PendingClaudeRollover(peers); ok {
+			t.Errorf("%s: followed %q", name, id)
+		}
+	}
+}
+
+// TurnQuery.SessionID: only a record Claude stamped with the followed
+// conversation is adopted.
+func TestTurnIdentity_SessionIDGuard(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "t.jsonl")
+	lines := `{"type":"user","uuid":"u-other","sessionId":"other","timestamp":"2026-10-27T12:00:00Z","message":{"role":"user","content":"hi"}}
+{"type":"user","uuid":"u-none","timestamp":"2026-10-27T12:00:01Z","message":{"role":"user","content":"hi"}}
+{"type":"user","uuid":"u-mine","sessionId":"mine","timestamp":"2026-10-27T12:00:02Z","message":{"role":"user","content":"hi"}}
+`
+	if err := os.WriteFile(path, []byte(lines), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	id, err := AwaitTurnIdentity(TurnQuery{Path: path, Prompt: "hi", SessionID: "mine"}, 200*time.Millisecond, 10*time.Millisecond)
+	if err != nil || id.UUID != "u-mine" {
+		t.Fatalf("id=%+v err=%v; want u-mine", id, err)
+	}
+	if _, err := AwaitTurnIdentity(TurnQuery{Path: path, Prompt: "hi", SessionID: "absent"}, 100*time.Millisecond, 10*time.Millisecond); err == nil {
+		t.Fatal("a record of another conversation was adopted")
+	}
+}
