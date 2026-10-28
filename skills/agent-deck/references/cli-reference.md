@@ -69,7 +69,8 @@ agent-deck add -t "Quick" -c claude --attach .   # create → start → drop int
 ```
 
 Notes:
-- Parent auto-link is enabled by default when `AGENT_DECK_SESSION_ID` is present and neither `--parent` nor `--no-parent` is passed. When the calling session is itself a sub-session, the new session starts top-level by default; set `[launch] nest_under_parent = true` to link it under the caller's parent instead (applies to `add` and `launch`, see config-reference.md).
+- Parent auto-link is enabled by default when `AGENT_DECK_SESSION_ID` is present and neither `--parent` nor `--no-parent` is passed. Sub-sessions can be parents, so when the calling session is itself a sub-session the new session is linked under the caller (a grandchild of the caller's parent); set `[launch] nest_under_parent = true` to link it under the caller's parent instead. A caller at `[launch] max_parent_depth` (default 3 levels below its top-level session) gets the session linked under its nearest ancestor with room, with a note on stderr (applies to `add` and `launch`, see config-reference.md).
+- `--parent` accepts a sub-session. It is refused when the parent is already at `[launch] max_parent_depth`.
 - `--attach` does create → start → attach in one step. Without an interactive terminal (or with `--json`) it exits non-zero with a clear error, leaving the session created and started so you can attach later.
 - `--parent` and `--no-parent` are mutually exclusive.
 - Explicit `-g/--group` overrides inherited parent group.
@@ -673,16 +674,17 @@ Exit codes: `0` done (with `--verify`, every graded group agreed within toleranc
 ### session children
 
 ```bash
-agent-deck session children [id|title] [--json] [-q] [--follow] [--until-done] [--interval <dur>] [--heartbeat <dur>]
+agent-deck session children [id|title] [--json] [-q] [--descendants] [--follow] [--until-done] [--interval <dur>] [--heartbeat <dur>]
 ```
 
-List a session's sub-sessions with live status and last completion history. Completion fields (`done_status`, `done_summary`, `done_at`) describe the last asserted completion; live `status` (running/waiting/idle/error/queued) determines the current turn — a session can show completion history and still be `running` again. Defaults to the current session. Read-only: never clears the inbox, so poll it as often as you like.
+List a session's sub-sessions with live status and last completion history. Direct children only by default; `--descendants` lists every level below, depth first (each child followed by its own subtree), and adds `parent_id` and `depth` (1 = direct child) to every row and every `--follow` event. With `--follow --until-done --descendants` the watch ends only when the whole subtree needs input or is terminal. Completion fields (`done_status`, `done_summary`, `done_at`) describe the last asserted completion; live `status` (running/waiting/idle/error/queued) determines the current turn — a session can show completion history and still be `running` again. Defaults to the current session. Read-only: never clears the inbox, so poll it as often as you like.
 
 `--follow` streams JSONL events instead of a single snapshot: `snapshot` (initial per-child state), `added`, `status` (from/to transition), `done` (completion sentinel), `removed`, `error`, plus a periodic `heartbeat` (default 60s, `--heartbeat 0` disables). `--until-done` exits 0 once every child either needs input or is terminal (waiting, idle with completion history, error, or stopped). `--interval` tunes the poll cadence backing `--follow` (default 2s).
 
 ```bash
 agent-deck session children --json
 agent-deck session children --follow --until-done
+agent-deck session children --descendants --json
 ```
 
 ### session metrics
@@ -769,6 +771,10 @@ agent-deck mcp attach my-session recall && agent-deck session restart my-session
 agent-deck session set-parent <session> <parent>
 agent-deck session unset-parent <session>
 ```
+
+The parent may itself be a sub-session, and a session that has sub-sessions may be moved: they move with it. `set-parent` refuses a link that would make a session its own ancestor (a parent that is the session or one of its descendants) and one that would put the session, or the deepest of its sub-sessions, deeper than `[launch] max_parent_depth`.
+
+A parent link means who a session escalates to and who may give it orders. Every consumer acts on the direct parent: a child's completion, `NEED:` line and escalations go to its parent only, never to a session further up, and `session children` lists direct children unless `--descendants` is given. Archiving a session that still has live (unarchived) children moves them up one layer, under the archived session's own parent, so their escalations keep reaching a session that reads them; `session archive --json` lists them under `relinked_children`. A top-level session has no layer above, so its children stay linked to it (`orphaned_children`). Unarchiving does not move them back; use `set-parent`.
 
 ### session switch-account
 

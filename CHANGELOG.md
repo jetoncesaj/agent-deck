@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### New features
+
+- Multi-level parents: a sub-session can be a parent, so a tree can run top-level session → child → grandchild (for example a project conductor → an Epic conductor → the Epic's workers). `launch --parent`, `add --parent` and `session set-parent` accept a sub-session; `set-parent` also moves a session that has sub-sessions (they move with it). A link that would make a session its own ancestor is refused, and so is one past the new `[launch] max_parent_depth` (default 3 levels below the top-level session; `1` is the old single-level rule).
+- Everything that follows parent links handles depth and acts on the direct parent only: a child's completion, `NEED:` line and escalations reach its parent, never a layer further up; the `[parent_wakes] mode = "escalation"` stall check holds off while any session below is running; `session children --descendants` (also with `--follow` and `--until-done`) covers the whole subtree with `parent_id` and `depth` per row; the TUI tree and the web sidebar nest at every depth with a continuation column per ancestor, a nested row with children folds like a top-level one, and the remote tree follows the same rule. The pane's role and breadcrumb already walked the whole chain.
+- Archiving a session that still has live children moves them up one layer, under the archived session's own parent, so their escalations keep reaching someone (`session archive --json` lists them as `relinked_children`; children of an archived top-level session stay linked and are listed as `orphaned_children`).
+
+### Changes
+
+- `add` and `launch` run from inside a sub-session without `--parent` now link the new session under the calling sub-session, as they do from a top-level session. Before, the session started top-level unless `[launch] nest_under_parent = true`. That key keeps working and now means "link under the caller's parent instead" on request; the same flattening also happens, with a note, when the caller is at `max_parent_depth`. Such sessions are now parented, so `[launch] prompt_suggestions = "children-off"` turns suggestions off for them and their completions go to the calling sub-session. Use `--no-parent` for a top-level session.
+- In the TUI, Shift+Left (and K/J at a sibling edge) promotes a sub-session one layer up instead of straight to top level, and Shift+Right demotes a session under its previous sibling at any depth, together with its own sub-sessions, within `max_parent_depth`.
+
 ## [1.16.34] - 2026-10-25
 
 ### Highlights

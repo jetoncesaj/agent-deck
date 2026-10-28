@@ -2905,8 +2905,8 @@
     },
     {
       "id": 98,
-      "prompt": "When one of my conductor's workers spawns a helper with agent-deck launch, the helper lands top-level instead of under the conductor. How do I make those nest under the caller's parent?",
-      "expected_output": "Sets `[launch] nest_under_parent = true` so add/launch from inside a sub-session without --parent link the new session under the caller's parent (default false starts it top-level); or pass `--parent` explicitly.",
+      "prompt": "When one of my conductor's workers spawns a helper with agent-deck launch, the helper lands under the worker instead of under the conductor. How do I make those nest under the caller's parent?",
+      "expected_output": "Sets `[launch] nest_under_parent = true` so add/launch from inside a sub-session without --parent link the new session under the caller's parent (default false links it under the calling sub-session itself, within `[launch] max_parent_depth`); or pass `--parent` explicitly.",
       "files": [],
       "area": "core",
       "promises": [
