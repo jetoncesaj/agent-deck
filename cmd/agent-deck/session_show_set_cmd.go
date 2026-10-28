@@ -198,6 +198,11 @@ func handleSessionShow(profile string, args []string) {
 		jsonData["intended_switch"] = rec
 	}
 	addConductorJSON(jsonData, inst)
+	// The open "asks you" state (session ask); omitted when none, as in
+	// list --json.
+	if ask, open := session.LoadAsk(inst.ID); open {
+		jsonData["asks"] = ask
+	}
 
 	// macapp-core-needs §3: the live native transcript and every native id
 	// seen for this session (Codex re-creates its rollout after the trust

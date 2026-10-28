@@ -740,6 +740,9 @@ func (d *TransitionDaemon) syncProfile(profile string) time.Duration {
 	// [parent_wakes] mode = "escalation": an error that outlived its grace
 	// and a stalled child are raised here; no turn carries them.
 	d.sweepEscalations(profile, byID, statuses, hookStatuses, notifyEnabled, time.Now())
+	// "Asks you": one desktop notification per new ask (the phone's comes
+	// through web push).
+	d.notifyAsks(profile, byID)
 
 	// Last, after this pass's own sends and wakes: idle sessions on an
 	// outdated Claude/Codex build restart onto the new one ([sessions]

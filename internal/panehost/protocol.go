@@ -17,8 +17,10 @@
 //	                        printable character, or enter, tab, backspace,
 //	                        escape, space, up, down, left, right, home, end,
 //	                        pgup, pgdn, delete, C-a .. C-z
-//	refresh FIELD VALUE     the session's FIELD (status, title, item, pr)
-//	                        changed to VALUE (VALUE may be empty)
+//	refresh FIELD VALUE     the session's FIELD (status, title, item, pr,
+//	                        asks) changed to VALUE (VALUE may be empty);
+//	                        asks is "<kind>: <question>" while the session
+//	                        asks the person something
 //	refresh manual          someone asked for a refresh (agent-deck pane refresh)
 //	attach                  a client attached: resend anything the terminal
 //	                        does not keep, such as kitty graphics

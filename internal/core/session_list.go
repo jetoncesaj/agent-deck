@@ -102,6 +102,9 @@ type SessionRow struct {
 	// a consumer finds a renamed or decorated conductor without parsing its
 	// title. Absent for any other session.
 	ConductorName string `json:"conductor_name,omitempty" doc:"stable conductor name of a conductor session (survives renames); absent for other sessions"`
+
+	// Asks is the session's open "asks you" state: it needs the person.
+	Asks *session.PersonAsk `json:"asks,omitempty" doc:"open asks-you state {kind: decision|pick|approval|fix, question, since, item, source}; absent when the session asks the person nothing"`
 }
 
 func sessionList(ctx context.Context, in SessionListIn) (SessionListOut, error) {
@@ -173,7 +176,14 @@ func staticSessionRow(inst *session.Instance, instances []*session.Instance, pro
 		IntendedSwitch:    inst.ActiveIntendedSwitchJSON(time.Now()),
 		IsConductor:       inst.IsConductor,
 		ConductorName:     inst.ListedConductorName(),
+		Asks:              listedAsk(inst.ID),
 	}
+}
+
+// listedAsk is the session's open ask, nil when none.
+func listedAsk(id string) *session.PersonAsk {
+	a, _ := session.LoadAsk(id)
+	return a
 }
 
 // liveSessionRows refreshes each session's status and fills every field.

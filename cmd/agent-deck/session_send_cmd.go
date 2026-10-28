@@ -284,6 +284,11 @@ func handleSessionSend(profile string, args []string) {
 		enabled:    !*noTag && !*queueWorker && sendTagsEnabled(),
 		draft:      *draft,
 	})
+	if !tagged && !*queueWorker && !*draft {
+		// Another session's untagged message is not the person answering
+		// the target's open "asks you" (session.PromptIsFromPerson).
+		session.RecordAskRelay(inst.ID, senderID, message)
+	}
 	if *queue && (*wait || *stream || *draft || *noWait || *deferIfBusy) {
 		out.Error("--queue is incompatible with --wait, --stream, --draft, --no-wait and --defer-if-busy", ErrCodeInvalidOperation)
 		exitCLI(2)

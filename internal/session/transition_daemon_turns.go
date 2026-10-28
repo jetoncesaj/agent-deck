@@ -63,6 +63,12 @@ func (d *TransitionDaemon) emitTurnWith(profile string, inst *Instance, byID map
 	if classified && facts.Pending {
 		return event, false
 	}
+	if classified && facts.UUID != "" {
+		// "Asks you": a marker line in the finished turn opens or clears the
+		// session's ask, once per turn. It is the person's, never the
+		// parent's: nothing below sees it as a question (textAsksParent).
+		ApplyAsksMarker(profile, inst.ID, facts.UUID, facts.Text)
+	}
 	var piv piTurnVerdict
 	if pi != nil {
 		piv = *pi

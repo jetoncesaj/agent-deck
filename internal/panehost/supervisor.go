@@ -49,7 +49,8 @@ type Options struct {
 	// provider's stdout and stderr are attached to it. Required.
 	TTY *os.File
 
-	// Fields returns the watched session fields (status, title, item, pr).
+	// Fields returns the watched session fields (status, title, item, pr,
+	// asks).
 	// A change in any value sends "refresh FIELD VALUE". Nil: no polling.
 	Fields       func() map[string]string
 	FieldsPeriod time.Duration // default 2s

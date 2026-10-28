@@ -59,6 +59,7 @@ func SweepInboxesForChildSession(childSessionID string) (int, error) {
 	RemoveTurnJournal(childSessionID)                // issue #2469 per-child turn journal
 	ForgetConsumedTurnsForChild(childSessionID)      // consumed-turn ledgers (this id as a CHILD)
 	ResetStopBlockBudget(childSessionID)             // Stop-hook block budget (if it was a parent)
+	RemoveAsk(childSessionID)                        // its "asks you" state
 	sweepParentSideArtifacts(childSessionID)         // audit B5: this id's OWN parent-side files
 
 	return totalDropped, err

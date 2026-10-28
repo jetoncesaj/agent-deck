@@ -85,6 +85,8 @@ func handleSession(profile string, args []string) {
 		handleSessionUpdate(profile, args[1:])
 	case "set-transition-notify":
 		handleSessionSetTransitionNotify(profile, args[1:])
+	case "ask":
+		handleSessionAsk(profile, args[1:])
 	case "set-title-lock":
 		handleSessionSetTitleLock(profile, args[1:])
 	case "set":
@@ -198,6 +200,7 @@ func printSessionHelp() {
 	fmt.Println("  update <id> --parent <pid>       Alias for set-parent <id> <pid>")
 	fmt.Println("  set-transition-notify <id> <on|off>  Enable/disable transition notifications")
 	fmt.Println("  set-title-lock <id> <on|off>         Lock/unlock title from Claude session-name sync (#697)")
+	fmt.Println("  ask <id|--self> --kind <k> \"<q>\"     Mark a session as needing the person (--clear to clear)")
 	fmt.Println()
 	fmt.Println("Global Options:")
 	fmt.Println("  -p, --profile <name>   Use specific profile")

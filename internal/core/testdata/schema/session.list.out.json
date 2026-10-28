@@ -64,6 +64,10 @@
           "type": "string",
           "format": "date-time"
         },
+        "asks": {
+          "$ref": "#/$defs/session.PersonAsk",
+          "description": "open asks-you state {kind: decision|pick|approval|fix, question, since, item, source}; absent when the session asks the person nothing"
+        },
         "background_work": {
           "$ref": "#/$defs/tmux.BackgroundWork",
           "description": "live; in-flight background work (workflow, agent, bash, monitor) behind substate background-work"
@@ -260,6 +264,33 @@
         "expires_at",
         "model",
         "reason"
+      ],
+      "additionalProperties": false
+    },
+    "session.PersonAsk": {
+      "type": "object",
+      "properties": {
+        "item": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "question": {
+          "type": "string"
+        },
+        "since": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "question",
+        "since"
       ],
       "additionalProperties": false
     },

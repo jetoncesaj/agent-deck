@@ -3254,6 +3254,9 @@ func buildListJSON(profileName string, instances []*session.Instance, cachedStat
 		// non-conductors).
 		IsConductor   bool   `json:"is_conductor,omitempty"`
 		ConductorName string `json:"conductor_name,omitempty"`
+
+		// Asks: see core.SessionRow (absent when none).
+		Asks *session.PersonAsk `json:"asks,omitempty"`
 	}
 	sessions := make([]sessionJSON, len(instances))
 	transcripts := session.ListedTranscriptPaths(instances)
@@ -3316,6 +3319,7 @@ func buildListJSON(profileName string, instances []*session.Instance, cachedStat
 			IsConductor:       inst.IsConductor,
 			ConductorName:     inst.ListedConductorName(),
 		}
+		sj.Asks, _ = session.LoadAsk(inst.ID)
 		if cached[inst] {
 			sj.StatusSource = "cached"
 		}

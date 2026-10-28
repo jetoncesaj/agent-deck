@@ -108,6 +108,9 @@ type MenuSession struct {
 	// (Instance.ResolveConductorName): stable across a decorated or renamed
 	// title. Empty for non-conductor sessions.
 	ConductorName string `json:"conductorName,omitempty"`
+	// Asks is the session's open "asks you" state (session ask): it needs
+	// the person. Nil when none. Web push raises one notification per ask.
+	Asks *session.PersonAsk `json:"asks,omitempty"`
 
 	ClaudeSessionID   string `json:"claudeSessionId,omitempty"`
 	GeminiSessionID   string `json:"geminiSessionId,omitempty"`
@@ -171,6 +174,7 @@ func ToMenuSession(inst *session.Instance) *MenuSession {
 	}
 	modelInfo := inst.LaunchModelInfo()
 
+	ask, _ := session.LoadAsk(inst.ID)
 	return &MenuSession{
 		ID:                 inst.ID,
 		Title:              inst.Title,
@@ -194,6 +198,7 @@ func ToMenuSession(inst *session.Instance) *MenuSession {
 		ArchivedAt:         inst.ArchivedAtThreadSafe(),
 		IsConductor:        inst.IsConductor,
 		ConductorName:      inst.ResolveConductorNameThreadSafe(),
+		Asks:               ask,
 		ClaudeSessionID:    inst.ClaudeSessionID,
 		GeminiSessionID:    inst.GeminiSessionID,
 		GeminiModel:        inst.GeminiModel,

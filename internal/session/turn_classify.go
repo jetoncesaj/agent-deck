@@ -322,7 +322,8 @@ func textAsksParent(text string) bool {
 	var tail []string
 	for _, raw := range strings.Split(text, "\n") {
 		line := strings.TrimSpace(raw)
-		if line == "" {
+		if line == "" || lineIsAsksMarker(line) {
+			// An "asks you" line asks the person, not the parent (asks.go).
 			continue
 		}
 		if lineIsNeedMarker(line) {

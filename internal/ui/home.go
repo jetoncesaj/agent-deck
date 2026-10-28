@@ -8372,6 +8372,17 @@ func (h *Home) renderSessionItem(
 		agentBadge = agStyle.Render(" ⚙")
 	}
 
+	// "Asks you" (session ask): the session needs the person. "?" and the
+	// ask's kind (decision, pick, approval, fix), read from the snapshot.
+	askBadge := ""
+	if instState.askKind != "" {
+		askStyle := lipgloss.NewStyle().Foreground(ColorYellow).Bold(true)
+		if selected {
+			askStyle = SessionStatusSelStyle
+		}
+		askBadge = askStyle.Render(" ?" + instState.askKind)
+	}
+
 	// Last-update timestamp badge — see pickBadgeTime for the formula.
 	// Selected rows reuse the selection-bar style instead of dim, so the
 	// badge stays legible inside the highlight.
@@ -8443,7 +8454,7 @@ func (h *Home) renderSessionItem(
 		cellWidth(status) + 1 + cellWidth(tool) +
 		cellWidth(maestroBadge) + cellWidth(yoloBadge) + cellWidth(worktreeBadge) +
 		cellWidth(sandboxBadge) + cellWidth(multiRepoBadge) + cellWidth(sshBadge) +
-		cellWidth(agentBadge) + cellWidth(timestampBadge)
+		cellWidth(agentBadge) + cellWidth(askBadge) + cellWidth(timestampBadge)
 	// Keep a useful title before spending narrow-row space on a worktree badge.
 	if listWidth > 0 && listWidth < 40 && worktreeBadge != "" {
 		originalWidth := cellWidth(worktreeBadge)
@@ -8509,7 +8520,7 @@ func (h *Home) renderSessionItem(
 	// The leading gutter (leftGutterWidth) keeps sessions aligned with group
 	// rows, which reserve the same gutter for root hotkey numbers.
 	row := fmt.Sprintf(
-		"%s%s%s%s%s%s %s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+		"%s%s%s%s%s%s %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
 		strings.Repeat(" ", leftGutterWidth),
 		baseIndent,
 		selectionPrefix,
@@ -8525,6 +8536,7 @@ func (h *Home) renderSessionItem(
 		multiRepoBadge,
 		sshBadge,
 		agentBadge,
+		askBadge,
 		viewersBadgeText,
 		triggersBadgeText,
 		accountBadge,

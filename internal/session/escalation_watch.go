@@ -146,9 +146,13 @@ func escalationCandidate(inst *Instance) bool {
 
 // childOwedAnswerOrDone reports whether a stall must not be raised: its last
 // turn asked the parent a question (already an escalation) or reported done,
-// or a child of its own is running (an Epic conductor waiting on its workers
-// is owed their results, not stalled).
+// it asks the person something (session ask), or a child of its own is
+// running (an Epic conductor waiting on its workers is owed their results,
+// not stalled).
 func childOwedAnswerOrDone(inst *Instance, byID map[string]*Instance, statuses map[string]string) bool {
+	if _, open := LoadAsk(inst.ID); open {
+		return true
+	}
 	if last := LastTurnJournalEntry(inst.ID); last != nil && (last.Question || last.DoneStatus != "") {
 		return true
 	}
