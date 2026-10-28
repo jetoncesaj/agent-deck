@@ -151,6 +151,9 @@ type allProfilesSessionJSON struct {
 	ClaudeSessionID   string    `json:"claude_session_id,omitempty"`
 	TranscriptPath    string    `json:"transcript_path,omitempty"`
 	ResolvedCodexHome string    `json:"resolved_codex_home,omitempty"`
+
+	// State: the driver-set row state, absent when unset.
+	State *session.RowState `json:"state,omitempty"`
 }
 
 func renderListAllProfiles(listed core.SessionListOut, jsonOutput bool) {
@@ -174,6 +177,7 @@ func renderListAllProfiles(listed core.SessionListOut, jsonOutput bool) {
 					Path:              row.Path,
 					Group:             row.Group,
 					Item:              row.Item,
+					State:             row.State,
 					Tool:              row.Tool,
 					Account:           row.Account,
 					Command:           row.Command,

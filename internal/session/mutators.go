@@ -73,6 +73,11 @@ const (
 	// A routing cache (`inbox post` delivers an item's events to the session
 	// whose item matches); the tracker holds the truth. See item_ref.go.
 	FieldItem = "item"
+	// FieldState sets the driver-set row state: a JSON object
+	// {"symbol","attention","word","role"} (attention needs-you, moving or
+	// quiet). Its symbol replaces the row's status icon. Empty clears (back
+	// to the deck's own status). Live. See row_state.go.
+	FieldState = "state"
 )
 
 var ValidMutableFields = []string{
@@ -105,6 +110,7 @@ var ValidMutableFields = []string{
 	FieldFavorite,
 	FieldIntendedSwitch,
 	FieldItem,
+	FieldState,
 }
 
 type FieldRestartPolicy int
@@ -587,6 +593,14 @@ func SetField(inst *Instance, field, value string, extraArgsTokens []string) (ol
 			return oldValue, nil, &MutationError{Field: field, Msg: "invalid item: " + rerr.Error()}
 		}
 		inst.SetItemRef(ref)
+
+	case FieldState:
+		oldValue = RowStateString(inst.RowState())
+		st, serr := ParseRowState(value)
+		if serr != nil {
+			return oldValue, nil, &MutationError{Field: field, Msg: "invalid state: " + serr.Error()}
+		}
+		inst.SetRowState(st)
 
 	case FieldFavorite:
 		oldValue = strconv.FormatBool(inst.Favorite)

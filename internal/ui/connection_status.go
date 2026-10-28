@@ -90,6 +90,27 @@ func rowStatusGlyph(status session.Status, substate session.Substate, archived b
 	return icon, style
 }
 
+// rowStateGlyph is the status glyph a driver-set row state (`session set
+// <id> state`) puts on the row in place of the deck's own: its symbol, in the
+// colour of its attention level (needs-you the attention colour, moving the
+// running colour, quiet the idle colour). ok is false when no state is set or
+// the row is archived (an archived row keeps the stopped glyph), and the
+// caller keeps rowStatusGlyph's answer: one symbol per row either way.
+func rowStateGlyph(st *session.RowState, archived bool) (icon string, style lipgloss.Style, ok bool) {
+	if st == nil || st.Symbol == "" || archived {
+		return "", lipgloss.Style{}, false
+	}
+	switch st.Attention {
+	case session.AttentionNeedsYou:
+		style = lipgloss.NewStyle().Foreground(ColorYellow).Bold(true)
+	case session.AttentionMoving:
+		style = SessionStatusRunning
+	default:
+		style = SessionStatusIdle
+	}
+	return st.Symbol, style, true
+}
+
 // remoteRowStatusGlyph is the remote-session entry point to rowStatusGlyph.
 //
 // A remote row's state arrives as raw JSON strings from `agent-deck list --json`

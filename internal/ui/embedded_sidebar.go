@@ -236,6 +236,9 @@ func (h *Home) renderEmbeddedSessionItem(
 	}
 
 	statusIcon, statusStyle := rowStatusGlyph(state.status, state.substate, inst.IsArchived())
+	if icon, style, ok := rowStateGlyph(state.rowState, inst.IsArchived()); ok {
+		statusIcon, statusStyle = icon, style
+	}
 	_, restarting := h.resumingSessions[inst.ID]
 	if restarting {
 		spinnerFrames := []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
@@ -272,6 +275,11 @@ func (h *Home) renderEmbeddedSessionItem(
 	// and it is where auto-named sessions get their task description promoted
 	// in place of the generated handle, the same way the classic row does.
 	displayTitle, _ := sessionDisplayLabelsFromState(state)
+	// Grouped tree only: the flat sidebar shows rows without their group,
+	// so they keep the full item ref.
+	if state.groupTitle != "" && h.sidebarMode != sidebarFlat {
+		displayTitle = state.groupTitle
+	}
 	label := strings.TrimSpace(displayTitle)
 	if label == "" {
 		label = inst.ID
@@ -320,6 +328,13 @@ func (h *Home) renderEmbeddedSessionItem(
 
 	metadataParts := make([]string, 0, 6)
 	metadataParts = append(metadataParts, statusText)
+	if st := state.rowState; st != nil {
+		for _, part := range []string{st.Word, st.Role} {
+			if part != "" {
+				metadataParts = append(metadataParts, part)
+			}
+		}
+	}
 	if tool != "" {
 		metadataParts = append(metadataParts, tool)
 	}
@@ -329,7 +344,7 @@ func (h *Home) renderEmbeddedSessionItem(
 	if restarting {
 		metadataParts = append(metadataParts, "restarting…")
 	}
-	if !h.compactSidebar && state.paneTitle != "" && state.paneTitle != label {
+	if !h.compactSidebar && state.paneTitle != "" && !subtitleRepeatsTitle(state.paneTitle, state.title) {
 		metadataParts = append(metadataParts, state.paneTitle)
 	}
 

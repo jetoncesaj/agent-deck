@@ -105,6 +105,9 @@ type SessionRow struct {
 
 	// Asks is the session's open "asks you" state: it needs the person.
 	Asks *session.PersonAsk `json:"asks,omitempty" doc:"open asks-you state {kind: decision|pick|approval|fix, question, since, item, source}; absent when the session asks the person nothing"`
+
+	// State is the driver-set row state (session set <id> state).
+	State *session.RowState `json:"state,omitempty" doc:"driver-set row state {symbol, attention: needs-you|moving|quiet, word, role}; absent when unset"`
 }
 
 func sessionList(ctx context.Context, in SessionListIn) (SessionListOut, error) {
@@ -161,6 +164,7 @@ func staticSessionRow(inst *session.Instance, instances []*session.Instance, pro
 		Path:              inst.ProjectPath,
 		Group:             inst.GroupPath,
 		Item:              inst.ItemRef(),
+		State:             inst.RowState(),
 		Tool:              inst.Tool,
 		Account:           inst.Account,
 		Command:           inst.Command,

@@ -178,6 +178,10 @@
         "ssh_remote_path": {
           "type": "string"
         },
+        "state": {
+          "$ref": "#/$defs/session.RowState",
+          "description": "driver-set row state {symbol, attention: needs-you|moving|quiet, word, role}; absent when unset"
+        },
         "status": {
           "type": "string"
         },
@@ -291,6 +295,28 @@
         "kind",
         "question",
         "since"
+      ],
+      "additionalProperties": false
+    },
+    "session.RowState": {
+      "type": "object",
+      "properties": {
+        "attention": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "word": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "attention",
+        "symbol"
       ],
       "additionalProperties": false
     },
