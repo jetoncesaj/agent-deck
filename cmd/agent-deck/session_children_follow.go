@@ -19,6 +19,12 @@ type childRow struct {
 	DoneStatus  string `json:"done_status,omitempty"`
 	DoneSummary string `json:"done_summary,omitempty"`
 	DoneAt      string `json:"done_at,omitempty"`
+	// ParentID and Depth are set by `--descendants` only: the row's direct
+	// parent and how far below the listed session it sits (1 = a direct
+	// child, 2 = a grandchild). A direct-children listing leaves both out,
+	// so its output is unchanged.
+	ParentID string `json:"parent_id,omitempty"`
+	Depth    int    `json:"depth,omitempty"`
 	// BackgroundWork is the in-flight background work keeping the child
 	// running (issue #2473); omitted otherwise. Not part of the --follow diff.
 	BackgroundWork *tmux.BackgroundWork `json:"background_work,omitempty"`
@@ -36,6 +42,8 @@ type followEvent struct {
 	DoneStatus  string `json:"done_status,omitempty"`
 	DoneSummary string `json:"done_summary,omitempty"`
 	DoneAt      string `json:"done_at,omitempty"`
+	ParentID    string `json:"parent_id,omitempty"`
+	Depth       int    `json:"depth,omitempty"`
 	Error       string `json:"error,omitempty"`
 }
 
@@ -107,6 +115,7 @@ func snapshotEvent(event string, r childRow) followEvent {
 	return followEvent{
 		Event: event, ID: r.ID, Title: r.Title, Status: r.Status,
 		DoneStatus: r.DoneStatus, DoneSummary: r.DoneSummary, DoneAt: r.DoneAt,
+		ParentID: r.ParentID, Depth: r.Depth,
 	}
 }
 
@@ -129,6 +138,7 @@ func diffChildEvents(prev, curr []childRow) []followEvent {
 		if old.Status != r.Status {
 			events = append(events, followEvent{
 				Event: "status", ID: r.ID, Title: r.Title, From: old.Status, To: r.Status,
+				ParentID: r.ParentID, Depth: r.Depth,
 			})
 		}
 		if r.DoneStatus != "" &&
@@ -136,12 +146,13 @@ func diffChildEvents(prev, curr []childRow) []followEvent {
 			events = append(events, followEvent{
 				Event: "done", ID: r.ID, Title: r.Title,
 				DoneStatus: r.DoneStatus, DoneSummary: r.DoneSummary, DoneAt: r.DoneAt,
+				ParentID: r.ParentID, Depth: r.Depth,
 			})
 		}
 	}
 	for _, r := range prev {
 		if !currIDs[r.ID] {
-			events = append(events, followEvent{Event: "removed", ID: r.ID, Title: r.Title})
+			events = append(events, followEvent{Event: "removed", ID: r.ID, Title: r.Title, ParentID: r.ParentID, Depth: r.Depth})
 		}
 	}
 	return events
@@ -193,10 +204,22 @@ func summarizeChildren(event string, rows []childRow) followSummary {
 // so tests can drive the loop without standing up storage.
 var pollChildRows = loadChildRows
 
+// pollDescendantRows is the --descendants poll; a var for the same reason.
+var pollDescendantRows = loadDescendantRows
+
 // loadChildRows does one full poll: fresh DB read, parent existence check,
 // status refresh, row build. Storage is closed before returning so the poll
 // loop never accumulates DB handles.
 func loadChildRows(profile, parentID string) ([]childRow, error) {
+	return loadScopedChildRows(profile, parentID, false)
+}
+
+// loadDescendantRows is loadChildRows over every level below parentID.
+func loadDescendantRows(profile, parentID string) ([]childRow, error) {
+	return loadScopedChildRows(profile, parentID, true)
+}
+
+func loadScopedChildRows(profile, parentID string, descendants bool) ([]childRow, error) {
 	storage, instances, _, err := loadSessionData(profile)
 	if err != nil {
 		return nil, err
@@ -214,9 +237,35 @@ func loadChildRows(profile, parentID string) ([]childRow, error) {
 		return nil, fmt.Errorf("parent session %s no longer exists", parentID)
 	}
 
+	if descendants {
+		entries := session.Descendants(parentID, instances, 0)
+		kids := descendantInstances(entries)
+		session.RefreshInstancesForCLIStatus(kids)
+		return buildDescendantRows(entries, sampleChildPanes), nil
+	}
 	kids := childrenOf(parentID, instances)
 	session.RefreshInstancesForCLIStatus(kids)
 	return buildChildRows(kids, sampleChildPanes), nil
+}
+
+// descendantInstances is the instance list of a Descendants walk.
+func descendantInstances(entries []session.DescendantEntry) []*session.Instance {
+	out := make([]*session.Instance, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.Instance)
+	}
+	return out
+}
+
+// buildDescendantRows is buildChildRows for a Descendants walk: each row also
+// carries its direct parent and its depth below the listed session.
+func buildDescendantRows(entries []session.DescendantEntry, sampling childRowsSampling) []childRow {
+	rows := buildChildRows(descendantInstances(entries), sampling)
+	for i := range rows {
+		rows[i].ParentID = entries[i].Instance.ParentSessionID
+		rows[i].Depth = entries[i].Depth
+	}
+	return rows
 }
 
 // runChildrenFollow streams child state changes as JSONL until interrupted,
@@ -230,7 +279,21 @@ func loadChildRows(profile, parentID string) ([]childRow, error) {
 // With untilDone, a parent that currently has no children is already "all
 // terminal" and completes immediately. Callers that mean to watch for children
 // yet to be spawned must attach after at least one child exists.
+//
+// It watches parentID's direct children. runDescendantsFollow watches every
+// level below it.
 func runChildrenFollow(profile, parentID string, interval, heartbeat time.Duration, untilDone bool, w io.Writer) int {
+	return followChildRows(func() ([]childRow, error) { return pollChildRows(profile, parentID) }, interval, heartbeat, untilDone, w)
+}
+
+// runDescendantsFollow is runChildrenFollow over every level below parentID
+// (`--follow --descendants`): --until-done then waits for the whole subtree,
+// and every line carries the row's parent_id and depth.
+func runDescendantsFollow(profile, parentID string, interval, heartbeat time.Duration, untilDone bool, w io.Writer) int {
+	return followChildRows(func() ([]childRow, error) { return pollDescendantRows(profile, parentID) }, interval, heartbeat, untilDone, w)
+}
+
+func followChildRows(poll func() ([]childRow, error), interval, heartbeat time.Duration, untilDone bool, w io.Writer) int {
 	// emit reports whether the stream is still writable. A consumer that goes
 	// away mid-stream (`... | head -1`) makes every later write fail; without
 	// this the loop would keep polling the DB forever with nowhere to write.
@@ -250,7 +313,7 @@ func runChildrenFollow(profile, parentID string, interval, heartbeat time.Durati
 	lastHeartbeat := time.Now()
 
 	for {
-		rows, err := pollChildRows(profile, parentID)
+		rows, err := poll()
 		if err != nil {
 			failures++
 			if !emit(followEvent{Event: "error", Error: err.Error()}) {

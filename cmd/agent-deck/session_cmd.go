@@ -995,10 +995,12 @@ func handleSessionChildren(profile string, args []string) {
 	interval := fs.Duration("interval", 2*time.Second, "Poll interval for --follow")
 	heartbeat := fs.Duration("heartbeat", 60*time.Second, "Heartbeat event interval for --follow (0 disables)")
 	untilDone := fs.Bool("until-done", false, "With --follow: exit 0 once live state shows every child needs input or is terminal (waiting, idle with completion history, error, or stopped)")
+	descendants := fs.Bool("descendants", false, "Include every level below the session, not only its direct children; each row carries parent_id and depth (1 = direct child)")
 	fs.Usage = func() {
 		fmt.Println("Usage: agent-deck session children [id|title] [options]")
 		fmt.Println()
 		fmt.Println("List a session's sub-sessions with live status and last completion history.")
+		fmt.Println("Direct children only by default; --descendants walks every level below.")
 		fmt.Println("Completion fields describe the last assertion; live status determines the current turn.")
 		fmt.Println("Defaults to the current session. Read-only; does not clear the inbox.")
 		fmt.Println()
@@ -1013,6 +1015,7 @@ func handleSessionChildren(profile string, args []string) {
 		fmt.Println("  agent-deck session children --json")
 		fmt.Println("  agent-deck session children --follow                    # live fleet event stream")
 		fmt.Println("  agent-deck session children --follow --until-done      # exits when every child needs input or finishes")
+		fmt.Println("  agent-deck session children --descendants --json       # the whole subtree, with parent_id and depth")
 	}
 	if err := parseCLIFlags(fs, normalizeArgs(fs, args)); err != nil {
 		exitCLI(1)
@@ -1056,21 +1059,41 @@ func handleSessionChildren(profile string, args []string) {
 	}
 	if *follow {
 		// The stream is JSONL by contract; --json/-q are irrelevant here.
+		if *descendants {
+			exitCLI(runDescendantsFollow(profile, parent.ID, *interval, *heartbeat, *untilDone, os.Stdout))
+		}
 		exitCLI(runChildrenFollow(profile, parent.ID, *interval, *heartbeat, *untilDone, os.Stdout))
 	}
 
-	kids := childrenOf(parent.ID, instances)
-	session.RefreshInstancesForCLIStatus(kids)
-
-	rows := buildChildRows(kids, sampleChildPanes)
+	var kids []*session.Instance
+	var rows []childRow
+	if *descendants {
+		entries := session.Descendants(parent.ID, instances, 0)
+		kids = descendantInstances(entries)
+		session.RefreshInstancesForCLIStatus(kids)
+		rows = buildDescendantRows(entries, sampleChildPanes)
+	} else {
+		kids = childrenOf(parent.ID, instances)
+		session.RefreshInstancesForCLIStatus(kids)
+		rows = buildChildRows(kids, sampleChildPanes)
+	}
 	var human strings.Builder
-	fmt.Fprintf(&human, "Children of %s (%s):\n", parent.Title, parent.ID)
+	heading := "Children"
+	if *descendants {
+		heading = "Descendants"
+	}
+	fmt.Fprintf(&human, "%s of %s (%s):\n", heading, parent.Title, parent.ID)
 	for _, row := range rows {
 		done := row.DoneStatus
 		if done == "" {
 			done = "-"
 		}
-		fmt.Fprintf(&human, "  %s  %-20s  %-8s  done=%s  %s\n", row.ID, row.Title, row.Status, done, row.DoneSummary)
+		// --descendants indents each level by two spaces under its parent.
+		indent := ""
+		if row.Depth > 1 {
+			indent = strings.Repeat("  ", row.Depth-1)
+		}
+		fmt.Fprintf(&human, "  %s%s  %-20s  %-8s  done=%s  %s\n", indent, row.ID, row.Title, row.Status, done, row.DoneSummary)
 	}
 	if len(kids) == 0 {
 		human.WriteString("  (no sub-sessions)\n")

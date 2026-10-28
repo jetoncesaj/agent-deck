@@ -293,3 +293,45 @@ func TestFollowEventJSONShape(t *testing.T) {
 		t.Errorf("empty done_status should be omitted: %s", b)
 	}
 }
+
+// --follow --descendants --until-done waits for the whole subtree: a middle
+// session that is already waiting does not end the watch while its own child
+// still runs, and the stream names each row's parent and depth.
+func TestRunDescendantsFollowWaitsForTheGrandchild(t *testing.T) {
+	polls := 0
+	restoreD, restoreC := pollDescendantRows, pollChildRows
+	pollChildRows = func(string, string) ([]childRow, error) {
+		t.Fatal("--descendants must not poll direct children only")
+		return nil, nil
+	}
+	pollDescendantRows = func(profile, parentID string) ([]childRow, error) {
+		polls++
+		grandchild := "running"
+		if polls >= 3 {
+			grandchild = "waiting"
+		}
+		return []childRow{
+			{ID: "mid", Title: "mid", Status: "waiting", ParentID: "top", Depth: 1},
+			{ID: "leaf", Title: "leaf", Status: grandchild, ParentID: "mid", Depth: 2},
+		}, nil
+	}
+	t.Cleanup(func() { pollDescendantRows, pollChildRows = restoreD, restoreC })
+
+	var out strings.Builder
+	if code := runDescendantsFollow("p", "top", time.Millisecond, 0, true, &out); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if polls != 3 {
+		t.Fatalf("polls = %d, want 3: the watch ended before the grandchild finished", polls)
+	}
+	s := out.String()
+	for _, want := range []string{
+		`"event":"snapshot","id":"leaf","title":"leaf","status":"running","parent_id":"mid","depth":2`,
+		`"event":"status","id":"leaf","title":"leaf","from":"running","to":"waiting","parent_id":"mid","depth":2`,
+		`"event":"complete","children":2`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("stream lacks %s:\n%s", want, s)
+		}
+	}
+}
