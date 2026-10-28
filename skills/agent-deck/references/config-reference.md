@@ -231,6 +231,37 @@ mcps       = ["memory"]              # Declarative loadout ([mcps.X] catalog nam
 | `plugins` | array | Top-level `[plugins.X]` catalog keys appended to `Instance.Plugins`. Existing manual plugin selections are preserved. Catalog refusal and validation rules remain authoritative. |
 | `mcps` | array | Declarative MCP loadout (`[mcps.X]` catalog names appended to the session's local `.mcp.json`). Same attach-only floor semantics; unknown catalog names skip with a warning. |
 
+### Plugin catalog (`[plugins.<name>]`)
+
+Claude Code plugins a session may enable. A group's `plugins = [...]`,
+`agent-deck plugin attach` and `session set <id> plugins ...` name catalog keys.
+
+```toml
+[plugins.octopus]
+name         = "octopus"               # plugin name in its marketplace
+source       = "nyldn/claude-octopus"  # marketplace name or github owner/repo
+auto_install = true                    # default false
+```
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `name` | string | Required. Plugin name; the plugin id is `<name>@<source>`. |
+| `source` | string | Required. Marketplace name (`claude-plugins-official`) or github `owner/repo`. |
+| `emits_channel` | bool | Default `false`. Attaching also adds `plugin:<name>@<source>` to the session's channels. |
+| `auto_install` | bool | Default `false`. When true and the plugin code is missing from the session's account profile, agent-deck runs `claude plugin marketplace add` and `claude plugin install` against that profile at session start. When false, agent-deck never installs it: install it once yourself. |
+| `description` | string | Help text in the plugin pickers. |
+
+A plugin is enabled only in the sessions that attach it: each such session runs
+on a per-session scratch copy of the account's `settings.json` with
+`enabledPlugins` set there. The install never enables a plugin for the whole
+account: `claude plugin install` writes `enabledPlugins` (and
+`marketplace add` writes `extraKnownMarketplaces`) into the account's
+`settings.json`, so agent-deck puts that file back byte-for-byte after the
+install, and skips the install when it cannot read the file first. A plugin you
+install by hand is enabled account-wide by Claude Code; run
+`claude plugin disable <name>@<source>` with the same `CLAUDE_CONFIG_DIR` to
+leave it to agent-deck's per-session enablement.
+
 `[groups."<path>"]` also carries one top-level key outside the `.claude`
 block:
 

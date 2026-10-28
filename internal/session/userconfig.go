@@ -3775,7 +3775,10 @@ type PluginDef struct {
 	// AutoInstall enables shell-out to `claude plugin install <Name>@<Source>`
 	// at session spawn when the plugin code is not yet present under the
 	// source profile's plugins/ directory. Best-effort: install failure is
-	// logged but does not block session start.
+	// logged but does not block session start. Default false: agent-deck
+	// never installs the plugin and the user installs it once. The install
+	// leaves the profile's settings.json byte-for-byte unchanged, so the
+	// plugin is enabled only in sessions that attach it.
 	AutoInstall bool `toml:"auto_install,omitempty"`
 
 	// Description is optional help text shown in the Edit Session dialog

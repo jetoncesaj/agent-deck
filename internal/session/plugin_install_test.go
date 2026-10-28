@@ -7,6 +7,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,35 +55,30 @@ func TestEnsurePluginsInstalled_NoOp_WhenNoPlugins(t *testing.T) {
 	}
 }
 
-// TestEnsurePluginsInstalled_AttachIsConsent asserts that an attached
-// catalog plugin gets installed even when its catalog `auto_install`
-// flag is false. Rationale: the user explicitly attached it (via CLI
-// or TUI), which is itself the consent signal — we should not silently
-// skip the install and leave the worker with `enabledPlugins[X]=true`
-// pointing at code that isn't on disk.
-func TestEnsurePluginsInstalled_AttachIsConsent(t *testing.T) {
+// TestEnsurePluginsInstalled_HonoursAutoInstallOff asserts that a catalog
+// plugin whose `auto_install` is false (or unset) is never installed by
+// agent-deck: no `claude plugin` command runs against the account
+// profile. The user installs it once by hand; the per-session scratch
+// overlay still enables it where it is attached.
+func TestEnsurePluginsInstalled_HonoursAutoInstallOff(t *testing.T) {
 	withTempHome(t)
 	writeConfig(t, os.Getenv("HOME"), `
 [plugins.octopus]
 name = "octopus"
 source = "nyldn/claude-octopus"
 auto_install = false
+
+[plugins.discord]
+name = "discord"
+source = "claude-plugins-official"
 `)
 	calls, _ := withStubPluginExec(t)
-	inst := &Instance{ID: "x", Tool: "claude", Plugins: []string{"octopus"}}
-	_ = inst.EnsurePluginsInstalled(t.TempDir())
-	// Expect at least one `plugin install ...` call. There may be a
-	// preceding `plugin marketplace add ...` for unknown marketplaces.
-	sawInstall := false
-	for _, c := range *calls {
-		for _, a := range c.args {
-			if a == "install" {
-				sawInstall = true
-			}
-		}
+	inst := &Instance{ID: "x", Tool: "claude", Plugins: []string{"octopus", "discord"}}
+	if err := inst.EnsurePluginsInstalled(t.TempDir()); err != nil {
+		t.Fatalf("EnsurePluginsInstalled: %v", err)
 	}
-	if !sawInstall {
-		t.Errorf("attach must trigger plugin install regardless of auto_install flag; got calls=%v", *calls)
+	if len(*calls) != 0 {
+		t.Errorf("auto_install off must not run claude plugin commands; got %d calls (%v)", len(*calls), *calls)
 	}
 }
 
@@ -358,5 +354,171 @@ auto_install = true
 	}
 	if len(*calls) != 0 {
 		t.Errorf("lock acquisition failure must short-circuit before exec; got %d calls", len(*calls))
+	}
+}
+
+// stubClaudeSettingsWrites makes the exec stub behave like claude 2.1.x:
+// `marketplace add` adds extraKnownMarketplaces and `install` adds
+// enabledPlugins[<id>]=true to <profile>/settings.json (re-marshalled, so
+// key order and formatting change too), and install drops the plugin code
+// into the cache.
+func stubClaudeSettingsWrites(t *testing.T, setResp func(func(name string, args []string) ([]byte, error)), profile string, installErr error) {
+	t.Helper()
+	setResp(func(name string, args []string) ([]byte, error) {
+		path := filepath.Join(profile, "settings.json")
+		settings := map[string]any{}
+		if data, err := os.ReadFile(path); err == nil {
+			_ = json.Unmarshal(data, &settings)
+		}
+		switch {
+		case len(args) >= 3 && args[1] == "marketplace" && args[2] == "add":
+			settings["extraKnownMarketplaces"] = map[string]any{args[len(args)-1]: map[string]any{}}
+		case len(args) >= 2 && args[1] == "install":
+			settings["enabledPlugins"] = map[string]any{args[len(args)-1]: true}
+		}
+		out, _ := json.Marshal(settings)
+		if err := os.WriteFile(path, out, 0o644); err != nil {
+			t.Fatalf("stub write settings: %v", err)
+		}
+		if len(args) >= 2 && args[1] == "install" {
+			if installErr != nil {
+				return []byte("simulated install failure"), installErr
+			}
+			_ = os.MkdirAll(filepath.Join(profile, "plugins", "cache", "nyldn/claude-octopus", "octopus", "1.0.0"), 0o755)
+		}
+		return nil, nil
+	})
+}
+
+// TestEnsurePluginsInstalled_AccountSettingsUnchanged asserts the fix for
+// the global-enablement leak: `claude plugin install` writes
+// enabledPlugins[<id>]=true into the account's settings.json, which would
+// load the plugin in every session on that account. After an install the
+// account's settings.json must be byte-for-byte what it was, with its
+// mode, whether the install succeeded or failed, and an absent file must
+// stay absent. The plugin code itself stays installed.
+func TestEnsurePluginsInstalled_AccountSettingsUnchanged(t *testing.T) {
+	const original = "{\n  \"model\": \"opus\",\n  \"theme\": \"dark\"\n}\n"
+	tests := []struct {
+		name       string
+		existing   bool
+		installErr error
+	}{
+		{name: "install succeeds", existing: true},
+		{name: "install fails after writing", existing: true, installErr: &simulatedExecErr{}},
+		{name: "no settings.json before", existing: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := withTempHome(t)
+			writeConfig(t, home, `
+[plugins.octopus]
+name = "octopus"
+source = "nyldn/claude-octopus"
+auto_install = true
+`)
+			profile := t.TempDir()
+			settingsPath := filepath.Join(profile, "settings.json")
+			if tt.existing {
+				if err := os.WriteFile(settingsPath, []byte(original), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			calls, setResp := withStubPluginExec(t)
+			stubClaudeSettingsWrites(t, setResp, profile, tt.installErr)
+
+			inst := &Instance{ID: "x", Tool: "claude", Plugins: []string{"octopus"}}
+			_ = inst.EnsurePluginsInstalled(profile)
+
+			if len(*calls) != 2 {
+				t.Fatalf("expected marketplace add + install; got %d calls (%v)", len(*calls), *calls)
+			}
+			if !tt.existing {
+				if _, err := os.Lstat(settingsPath); !os.IsNotExist(err) {
+					t.Fatalf("settings.json absent before install must stay absent; stat err=%v", err)
+				}
+				return
+			}
+			got, err := os.ReadFile(settingsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != original {
+				t.Errorf("account settings.json changed by install:\ngot:  %q\nwant: %q", got, original)
+			}
+			info, err := os.Stat(settingsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Mode().Perm() != 0o600 {
+				t.Errorf("settings.json mode: got %o, want 600", info.Mode().Perm())
+			}
+			if tt.installErr == nil && !pluginInstalled(profile, &PluginDef{Name: "octopus", Source: "nyldn/claude-octopus"}) {
+				t.Errorf("plugin code must stay installed after settings restore")
+			}
+		})
+	}
+}
+
+// TestEnsurePluginsInstalled_SymlinkedSettingsKeptAsLink asserts that a
+// settings.json symlinked from a dotfiles checkout keeps its link and its
+// target's bytes after an install.
+func TestEnsurePluginsInstalled_SymlinkedSettingsKeptAsLink(t *testing.T) {
+	const original = "{\n  \"theme\": \"dark\"\n}\n"
+	home := withTempHome(t)
+	writeConfig(t, home, `
+[plugins.octopus]
+name = "octopus"
+source = "nyldn/claude-octopus"
+auto_install = true
+`)
+	profile := t.TempDir()
+	target := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(profile, "settings.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	_, setResp := withStubPluginExec(t)
+	stubClaudeSettingsWrites(t, setResp, profile, nil)
+
+	inst := &Instance{ID: "x", Tool: "claude", Plugins: []string{"octopus"}}
+	_ = inst.EnsurePluginsInstalled(profile)
+
+	if dest, err := os.Readlink(link); err != nil || dest != target {
+		t.Fatalf("settings.json must stay a symlink to %q; got %q (err=%v)", target, dest, err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != original {
+		t.Errorf("symlink target changed by install:\ngot:  %q\nwant: %q", got, original)
+	}
+}
+
+// TestEnsurePluginsInstalled_UnreadableSettingsSkipsInstall asserts that
+// when the account's settings.json cannot be snapshotted, no install runs:
+// agent-deck would have no way to undo claude's global enablement.
+func TestEnsurePluginsInstalled_UnreadableSettingsSkipsInstall(t *testing.T) {
+	home := withTempHome(t)
+	writeConfig(t, home, `
+[plugins.octopus]
+name = "octopus"
+source = "nyldn/claude-octopus"
+auto_install = true
+`)
+	profile := t.TempDir()
+	// A directory where the file should be cannot be read as settings.
+	if err := os.Mkdir(filepath.Join(profile, "settings.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	calls, _ := withStubPluginExec(t)
+	inst := &Instance{ID: "x", Tool: "claude", Plugins: []string{"octopus"}}
+	_ = inst.EnsurePluginsInstalled(profile)
+	if len(*calls) != 0 {
+		t.Errorf("unreadable account settings must skip the install; got %d calls (%v)", len(*calls), *calls)
 	}
 }

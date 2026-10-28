@@ -161,6 +161,8 @@ Algorithm:
 
 Call site: `Instance.Start()` AFTER `prepareWorkerScratchConfigDirForSpawn` returns, BEFORE the actual `tmux new-session`. Order matters: scratch dir is now built (so `enabledPlugins` is set in scratch settings.json), but plugin code may not be physically present yet. `claude plugin install` must run against `sourceProfileDir`, NOT the scratch path — so installs are global per source profile (cheap, idempotent), enablement is per-session (scratch). The scratch dir's symlinked `plugins/` directory points at the source profile's `plugins/` (current `mirrorProfileEntries` behavior at `worker_scratch.go:170-190`), so the per-session claude finds the just-installed plugin code at runtime.
 
+Implementation note (later fix): the install runs only when the catalog entry has `auto_install = true`. `claude plugin marketplace add` and `claude plugin install` write `extraKnownMarketplaces` and `enabledPlugins[<id>] = true` into the source profile's `settings.json`, which enabled the plugin for every session on the account. `runPluginInstall` now snapshots that file before the commands and restores it byte-for-byte afterwards (through a symlink, if it is one), and skips the install if it cannot snapshot it. Enablement lives only in the scratch overlay.
+
 Failure mode: if `claude plugin install` errors (network, version mismatch, marketplace API change), session still starts; user sees the warning in `~/.agent-deck/state/<id>/session.log`. The scratch settings.json still has `enabledPlugins[<id>] = true`, but Claude won't load a plugin whose code is absent — it logs and proceeds. Net effect: zero blocking; observability via session log.
 
 ### 4.7 Channel auto-link

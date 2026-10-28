@@ -1,15 +1,25 @@
 // Plugin auto-install — shell-out to `claude plugin install <id>` when
-// the plugin's code isn't yet on disk for this session's profile.
+// the plugin's catalog entry has auto_install = true and its code isn't
+// yet on disk for this session's profile.
 // RFC: docs/rfc/PLUGIN_ATTACH.md §4.6.
 //
 // Best-effort: every failure mode logs and returns nil; session start
 // never blocks on install. If install fails, scratch settings.json
 // still has enabledPlugins[<id>] = true and claude logs its own
 // "plugin not found" at runtime.
+//
+// The install only puts plugin code on disk. `claude plugin marketplace
+// add` and `claude plugin install` also write extraKnownMarketplaces and
+// enabledPlugins[<id>] = true into the account's settings.json, which
+// would load the plugin in every session on that account. The account's
+// settings.json is snapshotted before the commands run and put back
+// byte-for-byte afterwards; enablement lives only in the per-session
+// scratch overlay (worker_scratch.go).
 
 package session
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -125,11 +135,12 @@ func scrubbedEnvForPluginInstall() []string {
 const pluginInstallTimeout = 90 * time.Second
 
 // EnsurePluginsInstalled shells out to `claude plugin install` for every
-// catalog plugin in i.Plugins whose code isn't already on disk under
-// sourceProfileDir. Best-effort: always returns nil. Concurrent installs
-// across sessions serialize via a per-(profile, plugin) lock under
-// `~/.agent-deck/locks/`. The catalog `auto_install` flag is NOT
-// consulted — explicit attach is itself the consent signal.
+// catalog plugin in i.Plugins that has auto_install = true and whose code
+// isn't already on disk under sourceProfileDir. A plugin with
+// auto_install off is left for the user to install once; attaching it
+// still enables it in the session's scratch settings. Best-effort: always
+// returns nil. Concurrent installs across sessions serialize via a
+// per-(profile, plugin) lock under `~/.agent-deck/locks/`.
 func (i *Instance) EnsurePluginsInstalled(sourceProfileDir string) error {
 	if i == nil || len(i.Plugins) == 0 || sourceProfileDir == "" {
 		return nil
@@ -140,6 +151,16 @@ func (i *Instance) EnsurePluginsInstalled(sourceProfileDir string) error {
 			continue
 		}
 		if pluginInstalled(sourceProfileDir, def) {
+			continue
+		}
+		if !def.AutoInstall {
+			sessionLog.Info("plugin_install_skipped",
+				slog.String("instance_id", i.ID),
+				slog.String("plugin_id", def.ID()),
+				slog.String("reason", "auto_install_off"),
+				slog.String("source_profile_dir", sourceProfileDir),
+				slog.String("guidance", "plugin code is not installed in this profile; install it once, or set auto_install = true in its [plugins.<name>] catalog entry"),
+			)
 			continue
 		}
 		runPluginInstall(sourceProfileDir, def, i.ID)
@@ -200,6 +221,37 @@ func runPluginInstall(sourceProfileDir string, def *PluginDef, instanceID string
 		return
 	}
 
+	// Refuse to run claude when its settings.json writes could not be
+	// undone: the plugin would stay enabled for the whole account.
+	snap, err := snapshotProfileSettings(sourceProfileDir)
+	if err != nil {
+		sessionLog.Warn("plugin_install_settings_snapshot_failed",
+			slog.String("instance_id", instanceID),
+			slog.String("plugin_id", def.ID()),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+	defer func() {
+		changed, err := snap.restore()
+		if err != nil {
+			sessionLog.Warn("plugin_install_settings_restore_failed",
+				slog.String("instance_id", instanceID),
+				slog.String("plugin_id", def.ID()),
+				slog.String("settings_path", snap.path),
+				slog.String("error", err.Error()),
+			)
+			return
+		}
+		if changed {
+			sessionLog.Info("plugin_install_settings_restored",
+				slog.String("instance_id", instanceID),
+				slog.String("plugin_id", def.ID()),
+				slog.String("settings_path", snap.path),
+			)
+		}
+	}()
+
 	ctx, cancel := context.WithTimeout(context.Background(), pluginInstallTimeout)
 	defer cancel()
 
@@ -229,6 +281,84 @@ func runPluginInstall(sourceProfileDir string, def *PluginDef, instanceID string
 		slog.String("instance_id", instanceID),
 		slog.String("plugin_id", def.ID()),
 	)
+}
+
+// profileSettingsSnapshot is a profile's settings.json as it was before
+// `claude plugin ...` ran. A symlinked settings.json (dotfiles) is read
+// and restored through its target, and the link itself is put back if
+// claude replaced it with a regular file.
+type profileSettingsSnapshot struct {
+	path     string // <profile>/settings.json
+	target   string // file actually holding the bytes (path, or the symlink's target)
+	linkDest string // raw symlink destination; "" when path was not a symlink
+	existed  bool
+	data     []byte
+	perm     os.FileMode
+}
+
+func snapshotProfileSettings(profileDir string) (*profileSettingsSnapshot, error) {
+	snap := &profileSettingsSnapshot{path: filepath.Join(profileDir, "settings.json")}
+	snap.target = snap.path
+	info, err := os.Lstat(snap.path)
+	if os.IsNotExist(err) {
+		return snap, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("stat %s: %w", snap.path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		if snap.linkDest, err = os.Readlink(snap.path); err != nil {
+			return nil, fmt.Errorf("reading symlink %s: %w", snap.path, err)
+		}
+		if snap.target, err = filepath.EvalSymlinks(snap.path); err != nil {
+			return nil, fmt.Errorf("resolving symlink %s: %w", snap.path, err)
+		}
+		if info, err = os.Stat(snap.target); err != nil {
+			return nil, fmt.Errorf("stat %s: %w", snap.target, err)
+		}
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", snap.target)
+	}
+	if snap.data, err = os.ReadFile(snap.target); err != nil {
+		return nil, fmt.Errorf("reading %s: %w", snap.target, err)
+	}
+	snap.existed = true
+	snap.perm = info.Mode().Perm()
+	return snap, nil
+}
+
+// restore puts settings.json back exactly as snapshotted and reports
+// whether anything had to change.
+func (s *profileSettingsSnapshot) restore() (bool, error) {
+	if !s.existed {
+		if _, err := os.Lstat(s.path); os.IsNotExist(err) {
+			return false, nil
+		}
+		if err := os.Remove(s.path); err != nil {
+			return false, fmt.Errorf("removing %s created by claude: %w", s.path, err)
+		}
+		return true, nil
+	}
+	changed := false
+	if s.linkDest != "" {
+		if dest, err := os.Readlink(s.path); err != nil || dest != s.linkDest {
+			if err := symlinkReplace(s.linkDest, s.path); err != nil {
+				return false, fmt.Errorf("restoring symlink %s: %w", s.path, err)
+			}
+			changed = true
+		}
+	}
+	current, err := os.ReadFile(s.target)
+	if err == nil && bytes.Equal(current, s.data) {
+		if info, statErr := os.Stat(s.target); statErr == nil && info.Mode().Perm() == s.perm {
+			return changed, nil
+		}
+	}
+	if err := atomicWriteFile(s.target, s.data, s.perm); err != nil {
+		return false, fmt.Errorf("restoring %s: %w", s.target, err)
+	}
+	return true, nil
 }
 
 // Lock identity = (canonical profile dir, source, name). Profile dir is
