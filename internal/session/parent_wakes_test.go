@@ -389,6 +389,19 @@ func TestParentWakes_DaemonSweep(t *testing.T) {
 			f.byID[w.ID] = w
 			return map[string]string{w.ID: "running"}
 		}},
+		{"a worker two layers below is running", func(t *testing.T, f *turnTestFixture) map[string]string {
+			// The child is a project-level layer: its Epic conductor sits
+			// waiting on its own worker, which runs.
+			f.appendTurn(t, fxTaskNotification("u0"), fxAssistantText("a0", "Epic started."))
+			epic := NewInstanceWithTool("epic", f.child.ProjectPath, "claude")
+			epic.ID = "epic-2469"
+			epic.ParentSessionID = f.child.ID
+			w := NewInstanceWithTool("worker", f.child.ProjectPath, "claude")
+			w.ID = "worker-2469"
+			w.ParentSessionID = epic.ID
+			f.byID[epic.ID], f.byID[w.ID] = epic, w
+			return map[string]string{epic.ID: "waiting", w.ID: "running"}
+		}},
 	}
 	for _, tc := range owed {
 		t.Run("no stall while "+tc.name, func(t *testing.T) {

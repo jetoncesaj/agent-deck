@@ -146,9 +146,10 @@ func escalationCandidate(inst *Instance) bool {
 
 // childOwedAnswerOrDone reports whether a stall must not be raised: its last
 // turn asked the parent a question (already an escalation) or reported done,
-// it asks the person something (session ask), or a child of its own is
-// running (an Epic conductor waiting on its workers is owed their results,
-// not stalled).
+// it asks the person something (session ask), or a session anywhere below it
+// is running (an Epic conductor waiting on its workers is owed their
+// results, not stalled; so is a project conductor whose Epic conductor sits
+// idle while that Epic's workers run).
 func childOwedAnswerOrDone(inst *Instance, byID map[string]*Instance, statuses map[string]string) bool {
 	if _, open := LoadAsk(inst.ID); open {
 		return true
@@ -156,14 +157,35 @@ func childOwedAnswerOrDone(inst *Instance, byID map[string]*Instance, statuses m
 	if last := LastTurnJournalEntry(inst.ID); last != nil && (last.Question || last.DoneStatus != "") {
 		return true
 	}
+	return descendantRunning(inst.ID, byID, statuses)
+}
+
+// descendantRunning reports whether any session below parentID, at any
+// depth, is running or starting. Cycle-safe.
+func descendantRunning(parentID string, byID map[string]*Instance, statuses map[string]string) bool {
+	kids := make(map[string][]string, len(byID))
 	for id, other := range byID {
-		if other == nil || strings.TrimSpace(other.ParentSessionID) != inst.ID || id == inst.ID {
+		if other == nil {
 			continue
 		}
+		if pid := strings.TrimSpace(other.ParentSessionID); pid != "" && pid != id {
+			kids[pid] = append(kids[pid], id)
+		}
+	}
+	seen := map[string]bool{parentID: true}
+	queue := append([]string(nil), kids[parentID]...)
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
 		switch normalizeStatusString(statuses[id]) {
 		case string(StatusRunning), string(StatusStarting):
 			return true
 		}
+		queue = append(queue, kids[id]...)
 	}
 	return false
 }
