@@ -119,6 +119,8 @@ func handleSession(profile string, args []string) {
 		handleSessionCommand(profile, args[1:])
 	case "commands":
 		handleSessionCommands(profile, args[1:])
+	case "composer":
+		handleSessionComposer(profile, args[1:])
 	case "send-keys":
 		handleSessionSendKeys(profile, args[1:])
 	case "output":
@@ -181,6 +183,8 @@ func printSessionHelp() {
 	fmt.Println("  image-upload <id>       Stage an attachment from stdin (--name <uuid>.png --json; max 20 MiB)")
 	fmt.Println("  command [id] \"/cmd ...\"  Run a Claude slash command (/model, /compact, /clear, /exit, skills) and verify the outcome")
 	fmt.Println("  commands [id]           List the slash commands and skills a Claude session can run (--json)")
+	fmt.Println("  composer [id]           Show what is in a Claude session's input box (empty, text or unknown)")
+	fmt.Println("  composer clear [id] --expect TEXT|--expect-file F|--any  Clear the box only when it holds that text")
 	fmt.Println("  send-status <send-id>   State of a queued send: queued, typed, submitted, landed or failed")
 	fmt.Println("  queue list <session>    List durable queued sends (--json)")
 	fmt.Println("  queue release <id>      Send a queued entry now, with confirmed delivery evidence (--json)")

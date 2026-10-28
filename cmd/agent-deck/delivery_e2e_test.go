@@ -20,8 +20,8 @@ import (
 // They pin the delivery contracts that came back more than once:
 //   - a send to a busy target is reported queued, never failed, and reaches
 //     the target exactly once (#2033, #2273);
-//   - a foreign draft in the target's composer is never wiped or typed onto,
-//     and a queued send waits behind it, then lands once (#2104, #2263);
+//   - a foreign draft in the target's composer is never typed onto or lost:
+//     it is moved aside and put back (composer_draft_e2e_test.go);
 //   - a child's finished turn reaches its parent's durable inbox once, across
 //     notifier restarts, and drains once (#2007, #2028 reverted, #2039, #2240).
 
@@ -353,76 +353,10 @@ func TestDeliveryE2E_SendToBusyClaudeIsQueuedAndLandsOnce(t *testing.T) {
 	}
 }
 
-// TestDeliveryE2E_ForeignDraftIsNeverWiped: an operator is typing in the
-// target's composer. A send refuses without touching the draft (#2263: the
-// guard pressed Ctrl-C, which wipes it and, twice, exits Claude), and a
-// --queue send waits behind the draft, stays queued (not failed), and lands
-// once after the operator submits their own text.
-func TestDeliveryE2E_ForeignDraftIsNeverWiped(t *testing.T) {
-	parallelSubprocessTest(t)
-	e := newDeliveryEnv(t)
-	f := e.startFake("draft-target", "idle", "")
-	e.setPhase(f, "idle")
-	draft := deliveryToken("OPERATOR_DRAFT") + " half written note"
-	keys := exec.Command("tmux", "send-keys", "-t", f.tmux, "-l", draft)
-	keys.Env = e.env
-	if out, err := keys.CombinedOutput(); err != nil {
-		t.Fatalf("type the draft: %v %s", err, out)
-	}
-	e.waitPane(f, "the operator draft", func(p string) bool { return strings.Contains(p, "❯ "+draft) })
-
-	refused := deliveryToken("REFUSED")
-	out, errOut, code := e.run("", nil, "session", "send", f.id, refused, "--no-wait", "--json")
-	var res struct{ Delivery string }
-	_ = json.Unmarshal([]byte(out), &res)
-	if code == 0 || res.Delivery != deliveryComposerBlocked {
-		t.Fatalf("send onto a foreign draft: exit %d delivery %q (%s %s); want a composer_blocked refusal", code, res.Delivery, out, errOut)
-	}
-	if got := f.draft(t); got != draft {
-		t.Fatalf("composer holds %q after the refused send, want the operator draft %q", got, draft)
-	}
-
-	queued := deliveryToken("BEHIND_DRAFT")
-	sendID := e.queue(f, queued)
-	issue2530WaitFor(t, 30*time.Second, "the worker to try twice behind the draft", func() bool {
-		st := e.sendStatus(sendID)
-		if st.State == "failed" {
-			t.Fatalf("queued send failed behind a draft: %+v", st)
-		}
-		return st.Attempts >= 2
-	})
-	// typing is the worker's attempt in flight; it must end refused, untyped.
-	if st := e.sendStatus(sendID); st.State != "queued" && st.State != "typing" {
-		t.Fatalf("send behind a draft is %q, want still queued: %+v", st.State, st)
-	}
-	if got := f.draft(t); got != draft {
-		t.Fatalf("composer holds %q while a send waits, want the operator draft %q", got, draft)
-	}
-	if n := f.received(t, refused) + f.received(t, queued); n != 0 {
-		t.Fatalf("a refused message reached the target %d time(s)", n)
-	}
-
-	// The operator submits their draft; the queued send then lands once.
-	enter := exec.Command("tmux", "send-keys", "-t", f.tmux, "Enter")
-	enter.Env = e.env
-	if out, err := enter.CombinedOutput(); err != nil {
-		t.Fatalf("submit the draft: %v %s", err, out)
-	}
-	issue2530WaitFor(t, 5*time.Second, "the operator draft to be submitted", func() bool { return f.received(t, draft) == 1 })
-	e.hook(f, "Stop")
-	issue2530WaitFor(t, 30*time.Second, "the queued send to reach the target", func() bool { return f.received(t, queued) > 0 })
-	st := e.waitSettled(f, sendID, queued, 20*time.Second)
-	time.Sleep(time.Second)
-	if n := f.received(t, queued); n != 1 {
-		t.Fatalf("queued send reached the target %d times, want 1 (record %+v)", n, st)
-	}
-	if n := f.received(t, draft); n != 1 {
-		t.Fatalf("operator draft submitted %d times, want 1", n)
-	}
-	if n := f.received(t, refused); n != 0 {
-		t.Fatalf("the refused send reached the target %d time(s) after all", n)
-	}
-}
+// A draft in the target's composer (#2104, #2263, and the later move-aside
+// contract) is covered by composer_draft_e2e_test.go: the draft is moved
+// aside with Ctrl+U, never Ctrl-C, the send lands once, and the draft is
+// typed back.
 
 // pendingFrom reads parent's inbox through the CLI without consuming it and
 // returns the records for child.
