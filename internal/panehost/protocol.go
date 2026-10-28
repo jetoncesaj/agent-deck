@@ -23,6 +23,8 @@
 //	refresh FIELD VALUE     the session's FIELD (status, title, item, pr)
 //	                        changed to VALUE (VALUE may be empty)
 //	refresh manual          someone asked for a refresh (agent-deck pane refresh)
+//	refresh FIELD VALUE     also from agent-deck pane refresh --field F
+//	                        --value V, for any other FIELD (e.g. "plane")
 //	attach                  a client attached: resend anything the terminal
 //	                        does not keep, such as kitty graphics
 //

@@ -66,6 +66,11 @@ type Options struct {
 	// OnControl receives each line the provider writes to its control fd.
 	OnControl func(line string)
 
+	// Refreshes drains the queued `pane refresh` requests on SIGUSR1, each
+	// the text after "refresh " ("manual" or "FIELD VALUE"). Nil, or an
+	// empty drain, sends "refresh manual".
+	Refreshes func() []string
+
 	// ClickClient returns the tmux client that made the click being
 	// forwarded ("" when unknown); it is appended to the click line as
 	// "click X Y CLIENT". Nil: clicks carry no client.
@@ -307,7 +312,16 @@ loop:
 					o.Layout()
 				}
 			case syscall.SIGUSR1:
-				send("refresh manual")
+				var reqs []string
+				if o.Refreshes != nil {
+					reqs = o.Refreshes()
+				}
+				if len(reqs) == 0 {
+					reqs = []string{"manual"}
+				}
+				for _, r := range reqs {
+					send("refresh " + r)
+				}
 			default:
 				stopped = true
 				break loop
