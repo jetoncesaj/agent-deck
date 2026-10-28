@@ -31,7 +31,6 @@ func TestClassifySubstate_ZeroSecondFinishedTurnIsNotModelUnavailable(t *testing
 	for _, summary := range []string{
 		"✻ Crunched for 0s",
 		"✻ Crunched for 0s · done 9:12 AM",
-		"✶ Crunched for 0s (0 tokens)",
 		"✻ Cooked for 0s · done 4:13 PM",
 		"✻ Churned for 0s · done 1:41 PM",
 	} {
@@ -45,6 +44,27 @@ func TestClassifySubstate_ZeroSecondFinishedTurnIsNotModelUnavailable(t *testing
 			}
 			if got := ClassifyPaneFrame("claude", pane); got != FrameWaiting {
 				t.Fatalf("frame verdict = %q, want %q", got, FrameWaiting)
+			}
+		})
+	}
+}
+
+// A zero-second summary classifies exactly like the same summary with a
+// non-zero duration: the duration is never the outage signal.
+func TestClassifySubstate_ZeroSecondSummaryMatchesNonZeroTwin(t *testing.T) {
+	d := NewPromptDetector("claude")
+	for _, pair := range [][2]string{
+		{"✻ Crunched for 0s · done 9:12 AM", "✻ Crunched for 12s · done 9:12 AM"},
+		{"✶ Crunched for 0s (0 tokens)", "✶ Crunched for 12s (1.2k tokens)"},
+		{"✻ Cooked for 0s · done 4:13 PM", "✻ Cooked for 3s · done 4:13 PM"},
+	} {
+		t.Run(pair[0], func(t *testing.T) {
+			zero, twin := zeroSecondTurnPane(pair[0]), zeroSecondTurnPane(pair[1])
+			if got, want := d.ClassifySubstate(zero), d.ClassifySubstate(twin); got != want || got == SubstateModelUnavailable {
+				t.Fatalf("substate = %q, non-zero twin = %q", got, want)
+			}
+			if got, want := ClassifyPaneFrame("claude", zero), ClassifyPaneFrame("claude", twin); got != want || got == FrameError {
+				t.Fatalf("frame verdict = %q, non-zero twin = %q", got, want)
 			}
 		})
 	}

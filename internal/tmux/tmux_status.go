@@ -241,13 +241,13 @@ func (s *Session) GetStatus() (string, error) {
 			)
 
 			// Honest Status v2: a model-unavailable no-op loop ("X is currently
-			// unavailable" / "Crunched for 0s") is the Fable-down case that this
-			// feature exists to surface. It must short-circuit to "error" BEFORE
-			// the busy check: the "✶ Crunched for 0s" completion line carries a
-			// decorative asterisk that hasBusyIndicator would otherwise misread
-			// as an active spinner and report "running" — the exact false-alive
-			// this feature fixes. classifySubstate already excluded a real
-			// (non-zero) crunch, so only the genuine no-op reaches here.
+			// unavailable", then a "Crunched for 0s" summary) is the Fable-down
+			// case that this feature exists to surface. It must short-circuit to
+			// "error" BEFORE the busy check: the "✶ Crunched for 0s" completion
+			// line carries a decorative asterisk that hasBusyIndicator would
+			// otherwise misread as an active spinner and report "running" — the
+			// exact false-alive this feature fixes. Only the unavailable banner
+			// classifies here; a zero-second summary alone is a quick turn.
 			if s.lastSubstate == SubstateModelUnavailable {
 				s.resetPromptNoBusyHoldLocked()
 				s.lastStableStatus = "error"

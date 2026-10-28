@@ -54,8 +54,10 @@ const (
 	SubstateWatching Substate = "watching"
 
 	// SubstateModelUnavailable marks the Fable-down no-op loop: the model
-	// reports unavailable ("X is currently unavailable", "Crunched for 0s")
-	// and the session cannot make progress despite looking alive. The single
+	// reports unavailable ("X is currently unavailable", followed by a
+	// "Crunched for 0s" summary) and the session cannot make progress despite
+	// looking alive. The zero-second summary alone is NOT the signal: every
+	// sub-second turn prints one. The single
 	// most important new signal. Pairs with status "error".
 	SubstateModelUnavailable Substate = "model-unavailable"
 
@@ -128,10 +130,11 @@ var modelUnavailableSubstrings = []string{
 	"model is currently unavailable",
 }
 
-// crunchedNoopMarker matches the "Crunched for 0s" zero-work completion the
-// no-op loop emits. The trailing "0s" is what distinguishes a no-op from a real
-// (non-zero-duration) crunch.
-const crunchedNoopMarker = "Crunched for 0s"
+// A zero-duration turn summary ("✻ Crunched for 0s", "✻ Cooked for 0s", any
+// spinner verb) is NOT a model-unavailable marker on its own: Claude prints it
+// for every turn that finishes in under a second, so a healthy quick answer
+// would read as an outage. The no-op loop's summary always sits under the
+// model's own "is currently unavailable" banner, which is what is matched.
 
 // ClassifySubstate returns the additive Substate for the given pane content.
 // Claude and codex have arms (each reads only its own captured renderings);
@@ -229,9 +232,9 @@ func (d *PromptDetector) classifyClaudeSubstate(content string) Substate {
 	}
 
 	// 3. Model-unavailable no-op loop (Fable down) with no live busy cue: the
-	//    "Crunched for 0s" / "is currently unavailable" line is the actionable
-	//    signal. Scan the recent tail so a stale line scrolled far up does not
-	//    match.
+	//    "is currently unavailable" banner is the actionable signal (a bare
+	//    "Crunched for 0s" summary is an ordinary quick turn). Scan the recent
+	//    tail so a stale line scrolled far up does not match.
 	if hasModelUnavailableNoop(content) {
 		return SubstateModelUnavailable
 	}
@@ -489,13 +492,13 @@ func (d *PromptDetector) hasClaudeBusyIndicator(content string) bool {
 	// The asterisk glyphs (✳ ✽ ✶ ✢, Claude 2.1.25+) double as the leading mark
 	// on COMPLETION lines ("✶ Crunched for 12s"), not just the active spinner.
 	// So an asterisk alone is NOT sufficient — only treat it as busy when an
-	// active cue co-occurs. (The zero-work "Crunched for 0s" no-op is already
-	// classified model-unavailable before this function runs.)
+	// active cue co-occurs. (A zero-second summary is a finished turn too.)
 	return false
 }
 
 // hasModelUnavailableNoop scans the last 15 non-empty lines (same window as the
-// error-banner heuristic) for the model-unavailable / zero-work no-op markers.
+// error-banner heuristic) for the model-unavailable banner. A zero-second turn
+// summary alone does not count (see modelUnavailableSubstrings).
 // Quoted/prompt lines are skipped so prose mentioning "unavailable" does not
 // match. Only the last turn is read (forEachCurrentTurnLine): a no-op line
 // above a later submitted prompt is history, not state (audit C).
@@ -506,7 +509,7 @@ func hasModelUnavailableNoop(content string) bool {
 		if hasAnyPrefix(line, claudeQuotedLinePrefixes) {
 			return false
 		}
-		return strings.Contains(line, crunchedNoopMarker) || containsAny(line, modelUnavailableSubstrings)
+		return containsAny(line, modelUnavailableSubstrings)
 	})
 }
 

@@ -379,8 +379,7 @@ func TestAudit_C_FailedLastTurnBannerIsCurrent(t *testing.T) {
 	// Same rule for the model-unavailable no-op: the failed turn's own
 	// "Crunched for 0s" summary is not a recovery.
 	failedNoop := "❯ recall the token\n" +
-		"⏺ Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic\n" +
-		"  API key instead, or ask your admin to enable access\n" +
+		"⏺ Fable is currently unavailable. Please try again later.\n" +
 		"✻ Crunched for 0s · done 8:25 PM\n" +
 		"❯ "
 	if !hasModelUnavailableNoop(failedNoop) {
@@ -388,6 +387,18 @@ func TestAudit_C_FailedLastTurnBannerIsCurrent(t *testing.T) {
 	}
 	if got := d.ClassifySubstate(failedNoop); got != SubstateModelUnavailable {
 		t.Fatalf("substate = %q, want %q", got, SubstateModelUnavailable)
+	}
+
+	// The org-disabled notice is not a model outage: its zero-second summary
+	// alone must not make it model-unavailable (account-blocked is
+	// transcript-derived, and the corpus labels this shape waiting).
+	orgDisabled := "❯ recall the token\n" +
+		"⏺ Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic\n" +
+		"  API key instead, or ask your admin to enable access\n" +
+		"✻ Crunched for 0s · done 8:25 PM\n" +
+		"❯ "
+	if hasModelUnavailableNoop(orgDisabled) {
+		t.Fatal("an org-disabled notice with a zero-second summary is not the model-unavailable no-op")
 	}
 
 	// Typed-but-unsent text in the input box is not a new turn: the banner

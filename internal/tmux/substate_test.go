@@ -52,8 +52,12 @@ func TestClassifySubstate_ModelUnavailable(t *testing.T) {
 				"  ? for shortcuts",
 		},
 		{
-			name: "crunched for zero seconds no-op",
-			content: "✶ Crunched for 0s (0 tokens)\n" +
+			// The no-op loop's zero-second summary under the banner. (The
+			// summary alone is an ordinary quick turn; see
+			// substate_zero_second_turn_test.go.)
+			name: "unavailable banner with zero-second summary",
+			content: "⏺ Fable is currently unavailable. Please try again later.\n" +
+				"✶ Crunched for 0s (0 tokens)\n" +
 				"\n" +
 				"❯ ",
 		},
