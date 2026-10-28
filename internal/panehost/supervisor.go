@@ -66,6 +66,11 @@ type Options struct {
 	// OnControl receives each line the provider writes to its control fd.
 	OnControl func(line string)
 
+	// ClickClient returns the tmux client that made the click being
+	// forwarded ("" when unknown); it is appended to the click line as
+	// "click X Y CLIENT". Nil: clicks carry no client.
+	ClickClient func() string
+
 	// Grace between SIGHUP and SIGKILL. Default DefaultGrace.
 	Grace time.Duration
 
@@ -279,6 +284,11 @@ loop:
 			break loop
 		case evs := <-input:
 			for _, l := range evs {
+				if o.ClickClient != nil && strings.HasPrefix(l, "click ") {
+					if c := o.ClickClient(); validClientName(c) {
+						l += " " + c
+					}
+				}
 				send(l)
 			}
 		case s := <-sigs:

@@ -52,6 +52,9 @@ type tmuxPTYBridge struct {
 	writer         *wsConnWriter
 
 	cmd *exec.Cmd
+	// clientPID is the tmux attach client's pid (#{client_pid}), the key a
+	// pane host's navigation request is routed by (internal/panenav).
+	clientPID int
 
 	// ptmxMu guards ptmx against a concurrent Close/Resize race. Close
 	// closes the PTY file and nils the pointer under the write lock;
@@ -102,12 +105,21 @@ func newTmuxPTYBridge(tmuxSession, tmuxSocketName, sessionID string, writer *wsC
 		sessionID:      sessionID,
 		writer:         writer,
 		cmd:            cmd,
+		clientPID:      cmd.Process.Pid,
 		ptmx:           ptmx,
 		done:           make(chan struct{}),
 	}
 
 	go b.streamOutput()
 	return b, nil
+}
+
+// ClientPID is the pid of the bridge's tmux client; 0 when unknown.
+func (b *tmuxPTYBridge) ClientPID() int {
+	if b == nil {
+		return 0
+	}
+	return b.clientPID
 }
 
 // snapshotPtmx returns the current ptmx *os.File under RLock. It returns

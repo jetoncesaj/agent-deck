@@ -183,7 +183,7 @@ func TestPaneCLIAutoOpenStatusCloseAndStop(t *testing.T) {
 	pid := paneE2EPID(t, pidFile)
 	paneE2EWait(t, "hello line", func() bool {
 		b, _ := os.ReadFile(inLog)
-		return strings.HasPrefix(string(b), "hello 1\n")
+		return strings.HasPrefix(string(b), "hello 2\n")
 	})
 
 	env, _ := os.ReadFile(envFile)

@@ -102,7 +102,7 @@ func TestTmuxOpenLayoutFocusAndClose(t *testing.T) {
 		t.Fatalf("first pane slot = %d", hp.Slot)
 	}
 	p1 := readPID(t, pid1)
-	waitFor(t, "hello", 3*time.Second, func() bool { return hasLine(in1, "hello 1") })
+	waitFor(t, "hello", 3*time.Second, func() bool { return hasLine(in1, "hello 2") })
 
 	st, err := Inspect(run, "agent")
 	if err != nil {
@@ -225,7 +225,7 @@ func TestTmuxMouseThroughAttachedClient(t *testing.T) {
 	in := filepath.Join(dir, "in.log")
 	ctl := filepath.Join(dir, "ctl.log")
 	hp := openTestHost(t, socket, run, "echo 'notify info hello' >&3; exec cat > "+in, ctl, false)
-	waitFor(t, "hello", 3*time.Second, func() bool { return hasLine(in, "hello 1") })
+	waitFor(t, "hello", 3*time.Second, func() bool { return hasLine(in, "hello 2") })
 	waitFor(t, "control line", 3*time.Second, func() bool { return hasLine(ctl, "notify info hello") })
 
 	client := exec.Command("tmux", "-L", socket, "attach", "-t", "agent")
@@ -253,7 +253,14 @@ func TestTmuxMouseThroughAttachedClient(t *testing.T) {
 	if _, err := fmt.Fprintf(master, "\x1b[<0;%d;%dM\x1b[<0;%d;%dm", x, y, x, y); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "click line", 4*time.Second, func() bool { return hasLine(in, "click 4 2") })
+	// The click binding Open installed records the client, and the click
+	// line carries it.
+	clients, err := ListClients(run)
+	if err != nil || len(clients) != 1 {
+		t.Fatalf("clients = %+v, %v", clients, err)
+	}
+	cl := clients[0]
+	waitFor(t, "click line with client", 4*time.Second, func() bool { return hasLine(in, "click 4 2 "+cl.Name) })
 	waitFor(t, "focus back on agent after click", 2*time.Second, func() bool {
 		return display(t, run, "agent", "#{pane_id}") == st.AgentPane
 	})
@@ -261,4 +268,70 @@ func TestTmuxMouseThroughAttachedClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "scroll line", 4*time.Second, func() bool { return hasLine(in, "scroll up 4 2") })
+}
+
+// goto on a terminal client: the client that clicked is switched to the
+// target session's tmux session.
+func TestTmuxGotoSwitchesClickingClient(t *testing.T) {
+	socket, run := testServer(t)
+	if _, err := run("new-session", "-d", "-s", "other", "-x", "160", "-y", "40", "sleep 600"); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	in := filepath.Join(dir, "in.log")
+	hp := openTestHost(t, socket, run, "exec cat > "+in, "", false)
+	waitFor(t, "hello", 3*time.Second, func() bool { return hasLine(in, "hello 2") })
+
+	client := exec.Command("tmux", "-L", socket, "attach", "-t", "agent")
+	client.Env = append(os.Environ(), "TERM=xterm-256color")
+	master, err := pty.StartWithSize(client, &pty.Winsize{Cols: 160, Rows: 40})
+	if err != nil {
+		t.Skipf("cannot attach a client: %v", err)
+	}
+	go func() { _, _ = io.Copy(io.Discard, master) }()
+	t.Cleanup(func() {
+		_ = client.Process.Signal(syscall.SIGTERM)
+		_ = master.Close()
+		_ = client.Wait()
+	})
+	waitFor(t, "client attached", 4*time.Second, func() bool {
+		cs, _ := ListClients(run)
+		return len(cs) == 1 && cs[0].Session == "agent"
+	})
+	left, _ := strconv.Atoi(display(t, run, hp.PaneID, "#{pane_left}"))
+	top, _ := strconv.Atoi(display(t, run, hp.PaneID, "#{pane_top}"))
+	if _, err := fmt.Fprintf(master, "\x1b[<0;%d;%dM\x1b[<0;%d;%dm", left+2, top+2, left+2, top+2); err != nil {
+		t.Fatal(err)
+	}
+	var clicker string
+	waitFor(t, "click with client", 4*time.Second, func() bool {
+		for _, l := range readLines(in) {
+			if f := strings.Fields(l); len(f) == 4 && f[0] == "click" {
+				clicker = f[3]
+				return true
+			}
+		}
+		return false
+	})
+	if got := ReadClickClient(run, hp.PaneID); got != clicker {
+		t.Fatalf("recorded client %q, click line says %q", got, clicker)
+	}
+
+	n := &Navigator{
+		Run: run, TmuxSession: "agent", Socket: socket,
+		Lookup: func(id string) (string, string, bool) {
+			if id == "s-other" {
+				return "other", socket, true
+			}
+			return "", "", false
+		},
+	}
+	n.Clicked(clicker)
+	if err := n.Goto("s-other"); err != nil {
+		t.Fatalf("Goto: %v", err)
+	}
+	waitFor(t, "client on the other session", 3*time.Second, func() bool {
+		cs, _ := ListClients(run)
+		return len(cs) == 1 && cs[0].Session == "other"
+	})
 }

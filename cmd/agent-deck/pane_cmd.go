@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -19,6 +21,7 @@ import (
 	"github.com/asheshgoplani/agent-deck/internal/desknotify"
 	"github.com/asheshgoplani/agent-deck/internal/logging"
 	"github.com/asheshgoplani/agent-deck/internal/panehost"
+	"github.com/asheshgoplani/agent-deck/internal/panenav"
 	"github.com/asheshgoplani/agent-deck/internal/session"
 )
 
@@ -414,6 +417,7 @@ func runPaneHost(profile, sessionID string, slot int, agentPane, socket, command
 		notifyMode = cfg.Pane.NotifyMode()
 	}
 	notifier := newPaneNotifier(notifyMode, target.Title, target.Conductor, profile)
+	nav := newPaneNavigator(run, socket, target.TmuxSession, storage)
 
 	code, err := panehost.Run(context.Background(), panehost.Options{
 		Command: command,
@@ -427,9 +431,22 @@ func runPaneHost(profile, sessionID string, slot int, agentPane, socket, command
 			}
 			return session.PaneFields(sessionID, now)
 		},
-		Probe:     func() panehost.Probe { return panehost.ProbeAgent(run, agentPane) },
-		Layout:    func() { panehost.ApplyLayoutAs(run, target.TmuxSession, self) },
-		OnControl: notifier.handle,
+		Probe:  func() panehost.Probe { return panehost.ProbeAgent(run, agentPane) },
+		Layout: func() { panehost.ApplyLayoutAs(run, target.TmuxSession, self) },
+		OnControl: func(line string) {
+			if ok, err := nav.Handle(line); ok {
+				if err != nil {
+					paneLog.Warn("pane_nav_refused", slog.String("session", sessionID), slog.String("line", logging.SanitizeValue(line)), slog.String("error", logging.SanitizeValue(err.Error())))
+				}
+				return
+			}
+			notifier.handle(line)
+		},
+		ClickClient: func() string {
+			c := panehost.ReadClickClient(run, self)
+			nav.Clicked(c)
+			return c
+		},
 		Logf: func(format string, a ...any) {
 			paneLog.Warn("pane_host", slog.String("session", sessionID), slog.String("msg", fmt.Sprintf(format, a...)))
 		},
@@ -449,6 +466,59 @@ func runPaneHost(profile, sessionID string, slot int, agentPane, socket, command
 		time.Sleep(3 * time.Second)
 	}
 	return 0
+}
+
+// newPaneNavigator wires a provider's goto and open lines: sessions are
+// looked up in the profile's storage, web terminal clients are handed to
+// their web server through internal/panenav, and URLs for a terminal client
+// go to the machine's opener.
+func newPaneNavigator(run panehost.Runner, socket, tmuxSession string, storage *session.Storage) *panehost.Navigator {
+	return &panehost.Navigator{
+		Run:         run,
+		TmuxSession: tmuxSession,
+		Socket:      socket,
+		Lookup: func(id string) (string, string, bool) {
+			all, _, err := storage.LoadLite()
+			if err != nil {
+				return "", "", false
+			}
+			for _, d := range all {
+				if d.ID == id {
+					return d.TmuxSession, d.TmuxSocketName, true
+				}
+			}
+			return "", "", false
+		},
+		Web: func(ev panenav.Event) (panenav.Reply, error) {
+			dir, err := panenav.Dir()
+			if err != nil {
+				return panenav.Reply{}, err
+			}
+			return panenav.Deliver(dir, ev, time.Second)
+		},
+		OpenLocal: openURLLocally,
+	}
+}
+
+// openURLLocally opens an already validated http(s) URL with the platform
+// opener, the URL as its only argument (never through a shell).
+func openURLLocally(url string) error {
+	name := "xdg-open"
+	if runtime.GOOS == "darwin" {
+		name = "open"
+	}
+	path, err := exec.LookPath(name)
+	if err != nil {
+		return fmt.Errorf("no URL opener on this machine: %w", err)
+	}
+	// #nosec G204 -- fixed opener; the URL was checked by panenav.ValidURL
+	// (http/https, no whitespace, so never an option).
+	cmd := exec.Command(path, url)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
 }
 
 // paneNotifier delivers a provider's "notify" control lines through Agent

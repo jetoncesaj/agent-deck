@@ -3,7 +3,7 @@
 import { html } from 'htm/preact'
 import { useEffect, useRef, useCallback, useState } from 'preact/hooks'
 import { effect } from '@preact/signals'
-import { selectedIdSignal, sessionsSignal, authTokenSignal, wsStateSignal, readOnlySignal } from './state.js'
+import { selectedIdSignal, sessionsSignal, authTokenSignal, wsStateSignal, readOnlySignal, selectSession } from './state.js'
 import { apiFetch } from './api.js'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -14,6 +14,7 @@ import { createPasteHandler } from './terminalPaste.js'
 import { registerOsc52Handler } from './terminalClipboard.js'
 import { createTerminalLinkHandler, installModifierClickLinks } from './terminalLinks.js'
 import { observeSession, shouldReattach, sessionStartedSignal, noteSessionStarted } from './terminalReconnect.js'
+import { handlePaneNav, openInNewTab } from './paneNav.js'
 
 // Mobile detection: pointer:coarse for touch devices
 function isMobileDevice() {
@@ -88,6 +89,10 @@ export function TerminalPanel() {
   // banner clears but ctx.wsReconnectEnabled is stuck at false from the
   // earlier TMUX_SESSION_NOT_FOUND, and the terminal never reattaches.
   const [reconnectKey, setReconnectKey] = useState(0)
+  // A link a side pane asked to open that the browser's popup blocker
+  // stopped (a phone: the request arrives without a user gesture). Shown as
+  // a tappable link; null when there is none.
+  const [paneLink, setPaneLink] = useState(null)
 
   // Signal vanilla app.js to suppress its terminal path while TerminalPanel is mounted
   useEffect(() => {
@@ -129,6 +134,7 @@ export function TerminalPanel() {
     cleanup()
     // #782: a fresh session connection clears any prior fatal banner.
     setFatalError(null)
+    setPaneLink(null)
 
     const container = containerRef.current
     const token = authTokenSignal.value
@@ -385,6 +391,17 @@ export function TerminalPanel() {
               } else if (payload.event === 'session_closed') {
                 ctx.terminalAttached = false
               }
+            } else if (payload.type === 'pane_nav') {
+              // A tap in a side pane: show another session (header, sidebar,
+              // URL and this terminal's target all follow the selection) or
+              // open a link on this device.
+              handlePaneNav(payload, {
+                items: sessionsSignal.value,
+                current: sessionId,
+                select: selectSession,
+                open: openInNewTab,
+                offer: setPaneLink,
+              })
             } else if (payload.type === 'error') {
               if (payload.code === 'TERMINAL_ATTACH_FAILED' || payload.code === 'TMUX_SESSION_NOT_FOUND') {
                 ctx.terminalAttached = false
@@ -502,6 +519,24 @@ export function TerminalPanel() {
       <div style="flex: 1; min-height: 0; min-width: 0; overflow: hidden; padding: 14px 16px;">
         <div ref=${containerRef} style="height: 100%; width: 100%; overflow: hidden;"/>
       </div>
+      ${paneLink && html`
+        <div role="status"
+             style=${{
+               position: 'absolute', inset: 'auto 12px 12px 12px', zIndex: 20,
+               border: '1px solid var(--border, rgba(255,255,255,0.15))',
+               background: 'rgba(22,22,30,0.95)',
+               borderRadius: 'var(--radius-lg)',
+               padding: '10px 14px',
+               display: 'flex', alignItems: 'center', gap: '10px',
+             }}>
+          <a href=${paneLink} target="_blank" rel="noopener noreferrer"
+             onClick=${() => setPaneLink(null)}
+             style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent, #7aa2f7);">
+            Open ${paneLink}
+          </a>
+          <button type="button" class="btn ghost" onClick=${() => setPaneLink(null)}>Dismiss</button>
+        </div>
+      `}
       ${fatalError && html`
         <div role="alert"
              style=${{

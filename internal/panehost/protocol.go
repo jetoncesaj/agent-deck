@@ -6,9 +6,12 @@
 // is any command. It draws on the pane's terminal (its stdout and stderr are
 // the pane) and reads one event per line on stdin:
 //
-//	hello 1                 first line; 1 is the protocol version
+//	hello 2                 first line; 2 is the protocol version
 //	resize COLS ROWS        pane size, sent at start and on every change
-//	click X Y               left button press, 0-based cell in the pane
+//	click X Y [CLIENT]      left button press, 0-based cell in the pane;
+//	                        CLIENT is the tmux client that clicked
+//	                        (#{client_name}, e.g. /dev/ttys012) when the
+//	                        host knows it (protocol 2)
 //	rclick X Y              right button press
 //	mclick X Y              middle button press
 //	scroll up X Y           wheel up over cell X Y
@@ -32,6 +35,19 @@
 //	notify TEXT             raise a notification (tier urgent)
 //	notify urgent TEXT      the same, tier explicit
 //	notify info TEXT        a low-priority notification (digest tier)
+//	goto SESSION-ID         take the client that last clicked to that
+//	                        Agent Deck session (protocol 2): a terminal
+//	                        client is switched to its tmux session, a web
+//	                        terminal page selects the session
+//	open URL                open an http(s) URL for the client that last
+//	                        clicked (protocol 2): in the browser of a web
+//	                        terminal page, else with the machine's opener
+//
+// Navigation lines name a session of the pane's profile and an http or https
+// URL; anything else is refused and logged. The host never runs what a
+// provider passes. With no click known, the most recently active client on
+// the pane's session is used; a clicker that moved to another session is not
+// followed.
 package panehost
 
 import (
@@ -40,7 +56,7 @@ import (
 )
 
 // ProtocolVersion is sent in the hello line.
-const ProtocolVersion = 1
+const ProtocolVersion = 2
 
 // Mouse tracking: button press/release reporting (1000) in SGR encoding
 // (1006), so coordinates beyond column 223 survive.

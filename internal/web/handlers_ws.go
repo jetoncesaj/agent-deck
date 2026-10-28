@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/asheshgoplani/agent-deck/internal/logging"
+	"github.com/asheshgoplani/agent-deck/internal/panenav"
 	"github.com/gorilla/websocket"
 )
 
@@ -22,12 +24,14 @@ type wsClientMessage struct {
 }
 
 type wsServerMessage struct {
-	Type      string    `json:"type"` // status, error
+	Type      string    `json:"type"` // status, error, pane_nav
 	Event     string    `json:"event,omitempty"`
 	Code      string    `json:"code,omitempty"`
 	Message   string    `json:"message,omitempty"`
 	Hint      string    `json:"hint,omitempty"` // #782: actionable next step for terminal-fatal errors
 	SessionID string    `json:"sessionId,omitempty"`
+	Target    string    `json:"target,omitempty"` // pane_nav goto: the session to show
+	URL       string    `json:"url,omitempty"`    // pane_nav open: the http(s) URL to open
 	Profile   string    `json:"profile,omitempty"`
 	ReadOnly  bool      `json:"readOnly,omitempty"`
 	Time      time.Time `json:"time,omitempty"`
@@ -217,6 +221,9 @@ func (s *Server) handleSessionWS(w http.ResponseWriter, r *http.Request) {
 			})
 		} else {
 			defer bridge.Close()
+			// A side pane's goto/open for this page's tmux client comes
+			// back here (internal/panenav), so the page follows a tap.
+			defer s.paneNav.Register(bridge.ClientPID(), s.paneNavDeliver(sessionID, writer.WriteJSON))()
 			_ = writer.WriteJSON(wsServerMessage{
 				Type:      "status",
 				Event:     "terminal_attached",
@@ -351,4 +358,47 @@ func snapshotSessionByID(snapshot *MenuSnapshot, sessionID string) (*MenuSession
 		}
 	}
 	return nil, false
+}
+
+// paneNavDeliver returns the delivery for one terminal page: a side pane's
+// goto (a session this server shows) or open (an http(s) URL) for the page's
+// tmux client becomes a pane_nav message on the page's socket. The page then
+// selects the session (header, sidebar, URL and reconnect target follow) or
+// opens the URL in the browser it runs in.
+func (s *Server) paneNavDeliver(sessionID string, send func(any) error) func(panenav.Event) error {
+	return func(ev panenav.Event) error {
+		msg := wsServerMessage{Type: "pane_nav", Event: ev.Action, SessionID: sessionID, Time: time.Now().UTC()}
+		switch ev.Action {
+		case panenav.ActionGoto:
+			if !s.knowsSession(ev.SessionID) {
+				return fmt.Errorf("unknown session %s", ev.SessionID)
+			}
+			msg.Target = ev.SessionID
+		case panenav.ActionOpen:
+			u, err := panenav.ValidURL(ev.URL)
+			if err != nil {
+				return err
+			}
+			msg.URL = u
+		default:
+			return fmt.Errorf("unknown action %q", ev.Action)
+		}
+		return send(msg)
+	}
+}
+
+// knowsSession reports whether id is a session in the menu this server
+// serves (cached snapshot first, then a full load).
+func (s *Server) knowsSession(id string) bool {
+	if cached, ok := s.menuData.(interface{ CachedMenuSnapshot() *MenuSnapshot }); ok {
+		if _, found := snapshotSessionByID(cached.CachedMenuSnapshot(), id); found {
+			return true
+		}
+	}
+	snapshot, err := s.menuData.LoadMenuSnapshot()
+	if err != nil {
+		return false
+	}
+	_, found := snapshotSessionByID(snapshot, id)
+	return found
 }

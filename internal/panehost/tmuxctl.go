@@ -24,6 +24,7 @@ const (
 	optZoomed    = "@agentdeck_pane_zoomed"  // window: 1 while the host zoomed the agent pane
 	optNarrow    = "@agentdeck_pane_narrow"  // window: narrow threshold in columns
 	optMinCols   = "@agentdeck_pane_mincols" // window: hide the column below this width
+	optClient    = "@agentdeck_pane_client"  // pane: the tmux client that last clicked in it
 
 	// focusHook is the window hook slot the host owns. It sends focus back
 	// to the agent pane when a host pane becomes active (a click selects
@@ -261,6 +262,7 @@ func Open(run Runner, spec OpenSpec) (HostPane, bool, error) {
 		return HostPane{}, false, err
 	}
 	hp := HostPane{PaneID: paneID, Slot: slot, PID: pid, SessionID: spec.SessionID, Command: spec.Command, Graphics: spec.Graphics}
+	InstallClickBinding(run)
 	ApplyLayout(run, spec.TmuxSession)
 	return hp, true, nil
 }
