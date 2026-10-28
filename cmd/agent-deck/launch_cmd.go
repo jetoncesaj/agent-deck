@@ -496,7 +496,7 @@ func handleLaunchCommand(profile string, args []string, inspectFlags func(*flag.
 	inheritParentGroup := shouldInheritParentGroup(explicitGroupProvided, *inheritGroup, func() bool {
 		return git.IsLinkedWorktree(path)
 	})
-	parentInstance, launchedBy, parentNote, parentErr := selectLaunchParent(sessionParent, *noParent, launchNestUnderParent(), instances)
+	parentInstance, launchedBy, parentNote, parentErr := selectLaunchParent(sessionParent, *noParent, launchParentRuleFromConfig(), instances)
 	if parentErr != nil {
 		message, code := launchParentErrorParts(parentErr)
 		out.Error(message, code)

@@ -905,6 +905,9 @@ func handleSessionSetParent(profile string, args []string) {
 		fmt.Println("Usage: agent-deck session set-parent <session> <parent> [--inherit-group]")
 		fmt.Println()
 		fmt.Println("Link a session as a sub-session of another session.")
+		fmt.Println("The parent may itself be a sub-session; the session's own sub-sessions")
+		fmt.Println("move with it. A link that would make a session its own ancestor, or put")
+		fmt.Println("any session deeper than [launch] max_parent_depth, is refused.")
 		fmt.Println("The session's group is preserved by default; pass --inherit-group")
 		fmt.Println("to also adopt the parent's group.")
 		fmt.Println("This works for any session, including those created with --no-parent.")
@@ -950,27 +953,12 @@ func handleSessionSetParent(profile string, args []string) {
 		return // unreachable, satisfies staticcheck SA5011
 	}
 
-	// Validate: can't set self as parent
-	if inst.ID == parentInst.ID {
-		out.Error("cannot set session as its own parent", ErrCodeInvalidOperation)
+	// Validate: not itself, not one of its own descendants (a session
+	// cannot become its own ancestor), and within [launch] max_parent_depth
+	// counting the session's own sub-sessions, which move with it.
+	if err := session.ValidateParentLink(inst, parentInst, instances, launchMaxParentDepth()); err != nil {
+		out.Error(err.Error(), ErrCodeInvalidOperation)
 		exitCLI(1)
-	}
-
-	// Validate: parent can't be a sub-session (single level only)
-	if parentInst.IsSubSession() {
-		out.Error("cannot set parent to a sub-session (single level only)", ErrCodeInvalidOperation)
-		exitCLI(1)
-	}
-
-	// Validate: session can't already have sub-sessions
-	for _, other := range instances {
-		if other.ParentSessionID == inst.ID {
-			out.Error(
-				fmt.Sprintf("session '%s' already has sub-sessions, cannot become a sub-session", inst.Title),
-				ErrCodeInvalidOperation,
-			)
-			exitCLI(1)
-		}
 	}
 
 	// Set parent (with project path for --add-dir access). Group is only

@@ -953,14 +953,22 @@ func (h *Home) suggestConductorParent() string {
 	if inst.IsConductor {
 		return inst.ID
 	}
-	// Cursor is on a session that has a conductor parent.
-	if inst.ParentSessionID != "" {
-		h.instancesMu.RLock()
-		parent, ok := h.instanceByID[inst.ParentSessionID]
-		h.instancesMu.RUnlock()
-		if ok && parent.IsConductor {
+	// Cursor is on a session below a conductor: the nearest conductor up
+	// its parent chain (an Epic conductor before the project conductor
+	// above it), one hop at a time.
+	h.instancesMu.RLock()
+	defer h.instancesMu.RUnlock()
+	seen := map[string]bool{inst.ID: true}
+	for pid := inst.ParentSessionID; pid != "" && !seen[pid]; {
+		seen[pid] = true
+		parent, ok := h.instanceByID[pid]
+		if !ok {
+			break
+		}
+		if parent.IsConductor {
 			return parent.ID
 		}
+		pid = parent.ParentSessionID
 	}
 	return ""
 }
@@ -972,14 +980,28 @@ func (h *Home) activeConductorSessions() []*session.Instance {
 	defer h.instancesMu.RUnlock()
 
 	var out []*session.Instance
+	// A conductor already at [launch] max_parent_depth cannot take a child,
+	// so it is not offered as one's parent.
+	maxDepth := session.ResolveMaxParentDepth(h.launchMaxParentDepth())
 	for _, inst := range h.instances {
 		if inst.IsConductor &&
 			inst.Status != session.StatusError &&
-			inst.Status != session.StatusStopped {
+			inst.Status != session.StatusStopped &&
+			session.CanTakeChild(inst, h.instances, maxDepth) {
 			out = append(out, inst)
 		}
 	}
 	return out
+}
+
+// launchMaxParentDepth is [launch] max_parent_depth as configured (0 =
+// default); a config that cannot be read counts as unset.
+func (h *Home) launchMaxParentDepth() int {
+	cfg, err := session.LoadUserConfig()
+	if err != nil || cfg == nil {
+		return 0
+	}
+	return cfg.Launch.MaxParentDepth
 }
 
 // mostRecentPathInGroup returns the project path of the most recently created

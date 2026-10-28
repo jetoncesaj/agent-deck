@@ -2108,14 +2108,23 @@ type LaunchSettings struct {
 	// Instance.EffectiveContextLevel.
 	ContextLevel string `toml:"context_level,omitempty"`
 
-	// NestUnderParent opts in to one-hop nesting for `launch` and `add` run
-	// from inside a sub-session without --parent: the new session is linked
-	// under the sub-session's own parent, takes its group by the same rules
-	// as any child of that parent, and a one-line note goes to stderr. false
-	// (the default) keeps the caller's
-	// sub-session out of it: the new session starts top-level in the
-	// folder-derived group, with no parent link and no note.
+	// NestUnderParent asks for the one-hop flattening `launch` and `add` used
+	// to need: run from inside a sub-session without --parent, the new
+	// session is linked under the sub-session's own parent (a sibling of the
+	// caller), takes its group by the same rules as any child of that
+	// parent, and a one-line note goes to stderr. false (the default) links
+	// it under the calling sub-session itself, like a call from a top-level
+	// session; the flattening then happens only when the caller is at the
+	// depth cap (MaxParentDepth).
 	NestUnderParent bool `toml:"nest_under_parent,omitempty"`
+
+	// MaxParentDepth caps how many parent links a session may sit below its
+	// top-level session (session.ResolveMaxParentDepth): 1 allows children
+	// only, 2 grandchildren, and so on. 0 or unset means
+	// session.DefaultMaxParentDepth. An explicit --parent or `session
+	// set-parent` past the cap is refused; an automatic parent past it is
+	// replaced by the nearest ancestor that fits, with a note.
+	MaxParentDepth int `toml:"max_parent_depth,omitempty"`
 
 	// PromptSuggestions controls Claude Code prompt suggestions (the dim
 	// predicted next message in an empty composer) in sessions agent-deck

@@ -324,7 +324,7 @@ func validateStartupQueryCapacity(profile, group, parent, path string, noParent,
 	if selectedGroup == "" {
 		selectedGroup = session.GroupPathForProject(path)
 	}
-	parentInst, _, _, parentErr := selectLaunchParent(parent, noParent, launchNestUnderParent(), instances)
+	parentInst, _, _, parentErr := selectLaunchParent(parent, noParent, launchParentRuleFromConfig(), instances)
 	if parentErr != nil {
 		var lpe *launchParentError
 		if errors.As(parentErr, &lpe) && lpe.UnresolvedID != "" {

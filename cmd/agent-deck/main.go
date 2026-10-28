@@ -2311,7 +2311,7 @@ func handleAddCommand(profile string, args []string, inspectFlags func(*flag.Fla
 	}
 
 	// Resolve parent session (see selectLaunchParent)
-	parentInstance, launchedBy, parentNote, parentErr := selectLaunchParent(sessionParent, *noParent, launchNestUnderParent(), instances)
+	parentInstance, launchedBy, parentNote, parentErr := selectLaunchParent(sessionParent, *noParent, launchParentRuleFromConfig(), instances)
 	if parentErr != nil {
 		message, _ := launchParentErrorParts(parentErr)
 		fmt.Printf("Error: %s\n", message)

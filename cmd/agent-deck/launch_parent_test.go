@@ -11,12 +11,14 @@ import (
 	"github.com/asheshgoplani/agent-deck/internal/session"
 )
 
-// One selector serves launch, add and the capacity pre-check. With
-// [launch] nest_under_parent on (nestOn), a session picked up automatically
-// from a sub-session lands under that sub-session's parent. Off (nestOff, the
-// default) keeps the v1.16.23 behaviour: such a session starts top-level.
+// One selector serves launch, add and the capacity pre-check. Sub-sessions
+// may be parents. With [launch] nest_under_parent on (nestOn), a session
+// picked up automatically from a sub-session lands under that sub-session's
+// parent (the old one-hop flattening, now asked for). Off (nestOff, the
+// default), it lands under the calling sub-session itself, unless the caller
+// is at [launch] max_parent_depth.
 
-const nestOn, nestOff = true, false
+var nestOn, nestOff = launchParentRule{NestUnderParent: true}, launchParentRule{}
 
 type parentFixture struct {
 	parent, child, other *session.Instance
@@ -77,22 +79,90 @@ func TestLaunchParent_SubsessionCallerAttachesToItsParent(t *testing.T) {
 	}
 }
 
-func TestLaunchParent_ExplicitSubsessionParentKeepsTheOldError(t *testing.T) {
+// A sub-session named with --parent is a parent like any other: the new
+// session becomes its child, whatever nest_under_parent says (that key is
+// only about the automatic parent).
+func TestLaunchParent_ExplicitSubsessionParentIsAccepted(t *testing.T) {
 	f := newParentFixture()
-	for _, nest := range []bool{nestOff, nestOn} {
-		for _, caller := range []string{"", f.child.ID} {
+	for _, nest := range []launchParentRule{nestOff, nestOn} {
+		for _, caller := range []string{"", f.child.ID, f.parent.ID} {
 			setCaller(t, caller)
 			for _, explicit := range []string{f.child.Title, f.child.ID} {
-				p, _, note, err := selectLaunchParent(explicit, false, nest, f.all)
-				if p != nil || note != "" || err == nil {
-					t.Fatalf("nest=%v explicit %q from %q: got parent=%v note=%q err=%v, want the single-level error", nest, explicit, caller, p, note, err)
-				}
-				lpe := lpErr(t, err)
-				if lpe.Message != "cannot create sub-session of a sub-session (single level only)" || lpe.Code != ErrCodeInvalidOperation {
-					t.Fatalf("nest=%v explicit %q from %q: got %+v, want the original message and code", nest, explicit, caller, lpe)
+				p, by, note, err := selectLaunchParent(explicit, false, nest, f.all)
+				if err != nil || p != f.child || by != nil || note != "" {
+					t.Fatalf("nest=%v explicit %q from %q: got parent=%s by=%s note=%q err=%v, want the sub-session and nothing else", nest, explicit, caller, titleOf(p), titleOf(by), note, err)
 				}
 			}
 		}
+	}
+}
+
+// deepChain adds c2 under the fixture's child and c3 under c2: depths
+// parent 0, child 1, c2 2, c3 3.
+func deepChain(f parentFixture) (c2, c3 *session.Instance, all []*session.Instance) {
+	c2 = session.NewInstanceWithGroupAndTool("C2", "/proj/c2", "g", "claude")
+	c2.ID = "c2-00001"
+	c2.SetParentWithPath(f.child.ID, f.child.ProjectPath)
+	c3 = session.NewInstanceWithGroupAndTool("C3", "/proj/c3", "g", "claude")
+	c3.ID = "c3-00001"
+	c3.SetParentWithPath(c2.ID, c2.ProjectPath)
+	return c2, c3, append(append([]*session.Instance{}, f.all...), c2, c3)
+}
+
+// An explicit parent already at the depth cap is refused with the depth
+// error, not silently replaced: the user named that parent.
+func TestLaunchParent_ExplicitParentAtTheCapIsRefused(t *testing.T) {
+	f := newParentFixture()
+	_, c3, all := deepChain(f)
+	setCaller(t, "")
+	p, _, _, err := selectLaunchParent(c3.ID, false, nestOff, all)
+	if p != nil || err == nil {
+		t.Fatalf("explicit parent at depth %d: got parent=%s err=%v, want the depth error", session.DefaultMaxParentDepth, titleOf(p), err)
+	}
+	lpe := lpErr(t, err)
+	if lpe.Code != ErrCodeInvalidOperation || !strings.Contains(lpe.Message, "max_parent_depth = 3") || !strings.Contains(lpe.Message, c3.Title) {
+		t.Fatalf("got %+v, want an invalid-operation error naming the parent and the cap", lpe)
+	}
+	// A lower cap refuses a shallower parent the same way; a higher one
+	// accepts c3.
+	if _, _, _, err := selectLaunchParent(f.child.ID, false, launchParentRule{MaxDepth: 1}, all); err == nil || !strings.Contains(err.Error(), "max_parent_depth = 1") {
+		t.Fatalf("max_parent_depth = 1 under a sub-session: err=%v, want the depth error", err)
+	}
+	if p, _, _, err := selectLaunchParent(c3.ID, false, launchParentRule{MaxDepth: 4}, all); err != nil || p != c3 {
+		t.Fatalf("max_parent_depth = 4: parent=%s err=%v, want c3", titleOf(p), err)
+	}
+}
+
+// An automatic parent at the cap is replaced by the nearest ancestor with
+// room, with a note and launched-by naming the caller.
+func TestLaunchParent_AutomaticParentAtTheCapFlattens(t *testing.T) {
+	f := newParentFixture()
+	c2, c3, all := deepChain(f)
+	for _, tc := range []struct {
+		name     string
+		caller   *session.Instance
+		rule     launchParentRule
+		want     *session.Instance
+		noteBits []string
+	}{
+		{"default cap, caller at depth 3", c3, nestOff, c2, []string{"C3 is at the depth limit", "max_parent_depth = 3", "linked under its parent C2"}},
+		{"cap 1, caller at depth 1", f.child, launchParentRule{MaxDepth: 1}, f.parent, []string{"Child is at the depth limit", "max_parent_depth = 1", "linked under its parent Parent"}},
+		{"cap 2 with nest on, caller at depth 2", c2, launchParentRule{NestUnderParent: true, MaxDepth: 2}, f.child, []string{"C2 is at the depth limit", "linked under its parent Child"}},
+		{"cap lowered below the caller", c3, launchParentRule{MaxDepth: 2}, f.child, []string{"C3 and its parent C2 are at the depth limit", "linked under their ancestor Child"}},
+		{"nest on below the cap", c2, nestOn, f.child, []string{"parent C2 is a sub-session; linked under its parent Child"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setCaller(t, tc.caller.ID)
+			p, by, note, err := selectLaunchParent("", false, tc.rule, all)
+			if err != nil || p != tc.want || by != tc.caller {
+				t.Fatalf("got parent=%s by=%s err=%v, want parent=%s by=%s", titleOf(p), titleOf(by), err, titleOf(tc.want), tc.caller.Title)
+			}
+			for _, bit := range tc.noteBits {
+				if !strings.Contains(note, bit) {
+					t.Fatalf("note %q lacks %q", note, bit)
+				}
+			}
+		})
 	}
 }
 
@@ -118,20 +188,22 @@ func TestLaunchParent_ExplicitParentUnknownErrors(t *testing.T) {
 	}
 }
 
-func TestLaunchParent_GrandparentNotTopLevelErrors(t *testing.T) {
+// With nest_under_parent on, a caller two levels down goes one hop up, to
+// its own parent (itself a sub-session now that trees nest), never further.
+func TestLaunchParent_NestOnFromADeepCallerGoesOneHop(t *testing.T) {
 	f := newParentFixture()
 
 	deep := session.NewInstanceWithGroupAndTool("Deep", "/proj/d", "g", "claude")
 	deep.ID = "dep-0001"
 	deep.SetParentWithPath(f.child.ID, f.child.ProjectPath)
 	setCaller(t, deep.ID)
-	p, _, _, err := selectLaunchParent("", false, nestOn, append(f.all, deep))
-	if p != nil || err == nil || !strings.Contains(err.Error(), deep.ID) || !strings.Contains(err.Error(), f.child.ID) {
-		t.Fatalf("two-level chain: got parent=%v err=%v, want an error naming both ids, no walking further", p, err)
+	p, by, note, err := selectLaunchParent("", false, nestOn, append(f.all, deep))
+	if err != nil || p != f.child || by != deep || !strings.Contains(note, "linked under its parent Child") {
+		t.Fatalf("two-level chain: got parent=%s by=%s note=%q err=%v, want the caller's parent Child", titleOf(p), titleOf(by), note, err)
 	}
 	p, _, _, err = selectLaunchParent(deep.Title, false, nestOn, append(f.all, deep))
-	if p != nil || err == nil {
-		t.Fatalf("explicit two-level chain: got parent=%v err=%v, want an error", p, err)
+	if err != nil || p != deep {
+		t.Fatalf("explicit two-level chain: got parent=%s err=%v, want Deep itself", titleOf(p), err)
 	}
 }
 
@@ -334,9 +406,22 @@ func TestLaunchParent_OnlyTheSelectorCallsTheAutoResolver(t *testing.T) {
 // seedParentRegistry stores the fixture (parent, child, other) in a profile.
 func seedParentRegistry(t *testing.T, profile, parentPath string) parentFixture {
 	t.Helper()
+	return seedParentRegistryWith(t, profile, func(f *parentFixture) {
+		if parentPath != "" {
+			f.parent.ProjectPath = parentPath
+		}
+	})
+}
+
+// seedParentRegistryWith is seedParentRegistry with the fixture adjusted by
+// edit before it is stored.
+func seedParentRegistryWith(t *testing.T, profile string, edit func(*parentFixture)) parentFixture {
+	t.Helper()
 	f := newParentFixture()
-	if parentPath != "" {
-		f.parent.ProjectPath = parentPath
+	edit(&f)
+	parentPath := f.parent.ProjectPath
+	if parentPath == "/proj/parent" {
+		parentPath = ""
 	}
 	storage, err := session.NewStorageWithProfile(profile)
 	if err != nil {
@@ -483,10 +568,26 @@ func TestLaunchParent_NestUnderParentConfigKey(t *testing.T) {
 	}
 }
 
-// With nest_under_parent off (the default) the selector keeps the v1.16.23
-// rule: a sub-session caller, dangling or not, is never a parent and never
-// produces a note; --no-parent is silent; a stale caller id still errors.
-func TestLaunchParent_DefaultOffKeepsTheOldRule(t *testing.T) {
+func TestLaunchParent_MaxParentDepthConfigKey(t *testing.T) {
+	home, _, _ := setupAddDefaultPathTest(t)
+	if got := launchMaxParentDepth(); got != session.DefaultMaxParentDepth {
+		t.Fatalf("cap without a config file = %d, want the default %d", got, session.DefaultMaxParentDepth)
+	}
+	for _, tc := range []struct {
+		value string
+		want  int
+	}{{"1", 1}, {"5", 5}, {"0", session.DefaultMaxParentDepth}, {"-2", session.DefaultMaxParentDepth}} {
+		writeAddUserConfig(t, home, "[launch]\nmax_parent_depth = "+tc.value+"\n")
+		if got := launchMaxParentDepth(); got != tc.want {
+			t.Fatalf("max_parent_depth = %s gives cap %d, want %d", tc.value, got, tc.want)
+		}
+	}
+}
+
+// With nest_under_parent off (the default) the calling session is the parent,
+// top-level or not, with no note and no launched-by; --no-parent is silent; a
+// stale caller id still errors.
+func TestLaunchParent_DefaultNestsUnderTheCaller(t *testing.T) {
 	f := newParentFixture()
 	orphan := session.NewInstanceWithGroupAndTool("Orphan", "/proj/o", "g", "claude")
 	orphan.ID = "orp-0001"
@@ -500,10 +601,10 @@ func TestLaunchParent_DefaultOffKeepsTheOldRule(t *testing.T) {
 		noParent     bool
 		want         *session.Instance
 	}{
-		{"sub-session caller", f.child.ID, false, nil},
+		{"sub-session caller", f.child.ID, false, f.child},
 		{"sub-session caller --no-parent", f.child.ID, true, nil},
-		{"dangling-parent caller", orphan.ID, false, nil},
-		{"two-level caller", deep.ID, false, nil},
+		{"dangling-parent caller", orphan.ID, false, orphan},
+		{"two-level caller", deep.ID, false, deep},
 		{"top-level caller", f.parent.ID, false, f.parent},
 		{"top-level caller --no-parent", f.parent.ID, true, nil},
 		{"no identity", "", false, nil},
@@ -536,16 +637,24 @@ func TestLaunchParent_DefaultOffNoParentSkipsTheTmuxProbe(t *testing.T) {
 	}
 }
 
-// The record `add` writes from inside a sub-session with no config is the
-// v1.16.23 record: no parent link, folder-derived group, no parent or
-// launched-by hint, no note.
-func TestLaunchParent_AddDefaultOffSubsessionCallerIsTopLevel(t *testing.T) {
-	home, cwd, profile := setupAddDefaultPathTest(t)
+// The record `add` writes from inside a sub-session with no config: the
+// calling sub-session is the parent (a grandchild of its parent), the group
+// is the caller's as for any child under `add`, the parent hint names the
+// caller, and there is no launched-by hint and no note.
+func TestLaunchParent_AddDefaultSubsessionCallerBecomesTheParent(t *testing.T) {
+	home, _, profile := setupAddDefaultPathTest(t)
 	parentPath := filepath.Join(home, "parent-project")
 	if err := os.MkdirAll(parentPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	f := seedParentRegistry(t, profile, parentPath)
+	childPath := filepath.Join(home, "child-project")
+	if err := os.MkdirAll(childPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := seedParentRegistryWith(t, profile, func(f *parentFixture) {
+		f.parent.ProjectPath = parentPath
+		f.child.ProjectPath = childPath
+	})
 	setCaller(t, f.child.ID)
 
 	stderr := captureStderr(t, func() {
@@ -553,30 +662,39 @@ func TestLaunchParent_AddDefaultOffSubsessionCallerIsTopLevel(t *testing.T) {
 	})
 
 	helper, hints := loadAddedHelper(t, profile)
-	if helper.ParentSessionID != "" {
-		t.Fatalf("helper parent %q, want none", helper.ParentSessionID)
+	if helper.ParentSessionID != f.child.ID {
+		t.Fatalf("helper parent %q, want the calling sub-session %q", helper.ParentSessionID, f.child.ID)
 	}
-	if want := session.GroupPathForProject(cwd); helper.GroupPath != want {
-		t.Fatalf("helper group %q, want the folder-derived %q", helper.GroupPath, want)
+	if helper.GroupPath != "child-group" {
+		t.Fatalf("helper group %q, want the caller's group", helper.GroupPath)
 	}
-	if _, ok := hints[hintKeyParent]; ok {
-		t.Fatalf("hints %v carry a parent", hints)
+	if hints[hintKeyParent] != f.child.ID {
+		t.Fatalf("hints %v, want parent=%s", hints, f.child.ID)
 	}
 	if _, ok := hints[hintKeyLaunchedBy]; ok {
 		t.Fatalf("hints %v carry launched-by", hints)
 	}
-	if strings.Contains(stderr, f.parent.Title) || strings.Contains(stderr, "linked under") {
+	if strings.Contains(stderr, "linked under") {
 		t.Fatalf("stderr %q carries a parent note", stderr)
 	}
 }
 
-func TestLaunchParent_PrecheckDefaultOffSubsessionCallerUsesFolderGroup(t *testing.T) {
+func TestLaunchParent_PrecheckDefaultSubsessionCallerUsesItsGroup(t *testing.T) {
 	_, _, profile := setupAddDefaultPathTest(t)
 	f := seedParentRegistry(t, profile, "")
 	setCaller(t, f.child.ID)
 	path := t.TempDir()
 	var group string
 	if err := validateStartupQueryCapacity(profile, "", "", path, false, true, true, &group); err != nil {
+		t.Fatalf("child caller refused by the pre-check: %v", err)
+	}
+	if group != "child-group" {
+		t.Fatalf("pre-check group %q, want the calling sub-session's group", group)
+	}
+	// Without --inherit-group the folder-derived group stands, as for any
+	// parent.
+	group = ""
+	if err := validateStartupQueryCapacity(profile, "", "", path, false, false, true, &group); err != nil {
 		t.Fatalf("child caller refused by the pre-check: %v", err)
 	}
 	if want := session.GroupPathForProject(path); group != want {
