@@ -189,23 +189,25 @@ func TestIssue2450_MissingParentRendersFlat(t *testing.T) {
 	}
 }
 
-// Nesting is a single level, like local sub-sessions: a grandchild does not
-// nest under a child, and a parent cycle never nests at all. Every fetched
-// session is still emitted exactly once.
-func TestIssue2450_SingleLevelAndCyclesStayFlat(t *testing.T) {
+// Nesting follows every layer, like local sub-sessions: a grandchild nests
+// under the child, one level deeper; a parent cycle (and a row hanging off
+// one) never nests at all. Every fetched session is still emitted exactly
+// once.
+func TestIssue2450_EveryLayerNestsAndCyclesStayFlat(t *testing.T) {
 	sessions := []session.RemoteSessionInfo{
 		{ID: "cond", Group: "work"},
 		{ID: "child", Group: "work", ParentSessionID: "cond"},
 		{ID: "grand", Group: "work", ParentSessionID: "child"},
 		{ID: "x", Group: "work", ParentSessionID: "y"},
 		{ID: "y", Group: "work", ParentSessionID: "x"},
+		{ID: "z", Group: "work", ParentSessionID: "x"},
 		{ID: "self", Group: "work", ParentSessionID: "self"},
 	}
 	items := buildRemoteFlatItemsWithEmptyGroups("box", sessions, nil, nil, nil, false)
 
 	want := []issue2450Row{
-		{"cond", 2, false}, {"child", 3, true},
-		{"grand", 2, false}, {"x", 2, false}, {"y", 2, false}, {"self", 2, false},
+		{"cond", 2, false}, {"child", 3, true}, {"grand", 4, true},
+		{"x", 2, false}, {"y", 2, false}, {"z", 2, false}, {"self", 2, false},
 	}
 	got := issue2450Rows(items)
 	if len(got) != len(want) {

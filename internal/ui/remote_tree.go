@@ -175,32 +175,39 @@ func buildRemoteFlatItemsWithEmptyGroups(remoteName string, sessions []session.R
 		}
 
 		path := remoteRoot + "/" + gp
-		for t, idx := range top {
-			lastTop := t == len(top)-1
-			kids := children[sessions[idx].ID]
-			items = append(items, session.Item{
+		// Emit each top-level row with its subtree under it, at any depth,
+		// like the local tree (flattenGroupSessions).
+		var bucketItems []session.Item
+		var emit func(idx, depth int, isLast bool, gutter []bool)
+		emit = func(idx, depth int, isLast bool, gutter []bool) {
+			it := session.Item{
 				Type:          session.ItemTypeRemoteSession,
 				RemoteSession: &sessions[idx],
 				RemoteName:    remoteName,
 				Path:          path,
-				Level:         sessionLevel,
-				IsLastInGroup: lastTop && len(kids) == 0,
-			})
+				Level:         sessionLevel + depth,
+				TreeDepth:     depth,
+			}
+			if depth > 0 {
+				it.IsSubSession = true
+				it.IsLastSubSession = isLast
+				it.ParentIsLastInGroup = gutter[0]
+				it.TreeGutter = append([]bool(nil), gutter...)
+			}
+			bucketItems = append(bucketItems, it)
+			kids := children[sessions[idx].ID]
+			childGutter := append(append([]bool(nil), gutter...), isLast)
 			for k, kidx := range kids {
-				lastKid := k == len(kids)-1
-				items = append(items, session.Item{
-					Type:                session.ItemTypeRemoteSession,
-					RemoteSession:       &sessions[kidx],
-					RemoteName:          remoteName,
-					Path:                path,
-					Level:               sessionLevel + 1,
-					IsLastInGroup:       lastTop && lastKid,
-					IsSubSession:        true,
-					IsLastSubSession:    lastKid,
-					ParentIsLastInGroup: lastTop,
-				})
+				emit(kidx, depth+1, k == len(kids)-1, childGutter)
 			}
 		}
+		for t, idx := range top {
+			emit(idx, 0, t == len(top)-1, nil)
+		}
+		if n := len(bucketItems); n > 0 {
+			bucketItems[n-1].IsLastInGroup = true
+		}
+		items = append(items, bucketItems...)
 	}
 
 	return items
@@ -212,13 +219,14 @@ func buildRemoteFlatItemsWithEmptyGroups(remoteName string, sessions []session.R
 // row's ID to the ID of the row it renders under; a row absent from the map
 // stays top level.
 //
-// It follows the local tree's rules: nesting is a single level, so a row
-// nests only when its parent is in the same bucket and that parent is not
-// itself nested there (a grandchild, or both halves of a parent cycle, render
-// flat). A parent outside the bucket, archived and filtered out, in another
-// group, or a remote too old to send parent_session_id, leaves the row flat
-// exactly as before. A bucket with duplicate IDs cannot say which row is the
-// parent, so nothing in it nests and every row is still emitted once.
+// It follows the local tree's rules: a row nests under its parent when the
+// parent is in the same bucket, at any depth, as long as following parents
+// inside the bucket ends at a top-level row. Rows of a parent cycle (and
+// rows hanging off one) have no such top and render flat. A parent outside
+// the bucket, archived and filtered out, in another group, or a remote too
+// old to send parent_session_id, leaves the row flat exactly as before. A
+// bucket with duplicate IDs cannot say which row is the parent, so nothing
+// in it nests and every row is still emitted once.
 func remoteNestedParents(ids, parents []string) map[string]string {
 	parentOf := make(map[string]string, len(ids))
 	for k, id := range ids {
@@ -240,9 +248,21 @@ func remoteNestedParents(ids, parents []string) map[string]string {
 		_, ok := parentOf[p]
 		return ok
 	}
+	// rooted reports whether id's chain inside the bucket ends at a row that
+	// is not linked (a top-level row), without meeting a cycle.
+	rooted := func(id string) bool {
+		seen := map[string]bool{}
+		for cur := id; linked(cur); cur = parentOf[cur] {
+			if seen[cur] {
+				return false
+			}
+			seen[cur] = true
+		}
+		return true
+	}
 	nested := make(map[string]string)
 	for id, p := range parentOf {
-		if linked(id) && !linked(p) {
+		if linked(id) && rooted(id) {
 			nested[id] = p
 		}
 	}
