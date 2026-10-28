@@ -2322,6 +2322,465 @@ func TestPromoteSession_OneLayerUp(t *testing.T) {
 	}
 }
 
+func TestGroupSortMode_DefaultAndSet(t *testing.T) {
+	t.Cleanup(func() { SetGroupSortMode("creation") })
+
+	SetGroupSortMode("creation") // normalize starting point
+	if got := currentGroupSortMode(); got != "creation" {
+		t.Fatalf("default/creation mode = %q, want creation", got)
+	}
+	SetGroupSortMode("actionable")
+	if got := currentGroupSortMode(); got != "actionable" {
+		t.Fatalf("after set actionable = %q, want actionable", got)
+	}
+	SetGroupSortMode("garbage")
+	if got := currentGroupSortMode(); got != "creation" {
+		t.Fatalf("garbage normalizes to %q, want creation", got)
+	}
+}
+
+func TestSortInstancesByActionable_CreationOrderDefault(t *testing.T) {
+	t.Cleanup(func() { SetGroupSortMode("creation") })
+	SetGroupSortMode("creation")
+	now := time.Now()
+
+	// Statuses + recency are arranged so an actionable sort would reorder these,
+	// but creation mode must keep strict Order ascending.
+	instances := []*Instance{
+		{ID: "a", GroupPath: "g", Order: 0, Status: StatusStopped, LastAccessedAt: now.Add(-5 * time.Hour)},
+		{ID: "b", GroupPath: "g", Order: 1, Status: StatusError, LastAccessedAt: now},
+		{ID: "c", GroupPath: "g", Order: 2, Status: StatusWaiting, LastAccessedAt: now.Add(-1 * time.Minute)},
+	}
+	tree := NewGroupTree(instances)
+	got := []string{}
+	for _, s := range tree.Groups["g"].Sessions {
+		got = append(got, s.ID)
+	}
+	want := []string{"a", "b", "c"}
+	if !equalStrings(got, want) {
+		t.Fatalf("creation mode must order by Order asc; got %v want %v", got, want)
+	}
+}
+
+func TestFlatten_OrphanSubSessionsDeterministic(t *testing.T) {
+	t.Cleanup(func() { SetGroupSortMode("creation") })
+	SetGroupSortMode("creation")
+
+	// Three sub-sessions whose parent lives in a DIFFERENT group than they do,
+	// so they render as orphaned top-level rows in group "g". Their Order
+	// values fix the expected display order.
+	mk := func(id string, order int, parent string) *Instance {
+		return &Instance{ID: id, Title: id, GroupPath: "g", Order: order, ParentSessionID: parent}
+	}
+	instances := []*Instance{
+		mk("s0", 0, "absent-p0"),
+		mk("s1", 1, "absent-p1"),
+		mk("s2", 2, "absent-p2"),
+	}
+
+	tree := NewGroupTree(instances)
+
+	var first []string
+	for _, it := range tree.Flatten() {
+		if it.Type == ItemTypeSession {
+			first = append(first, it.Session.ID)
+		}
+	}
+	if !equalStrings(first, []string{"s0", "s1", "s2"}) {
+		t.Fatalf("orphan order = %v, want [s0 s1 s2]", first)
+	}
+	// Repeat many times — map-iteration nondeterminism would surface a
+	// different order on some iteration.
+	for i := 0; i < 50; i++ {
+		var got []string
+		for _, it := range tree.Flatten() {
+			if it.Type == ItemTypeSession {
+				got = append(got, it.Session.ID)
+			}
+		}
+		if !equalStrings(got, first) {
+			t.Fatalf("Flatten order not stable across calls: iter %d got %v, want %v", i, got, first)
+		}
+	}
+}
+
+// When orphaned sub-sessions share the same Order, the sort must still be
+// deterministic: without an ID tie-break, SliceStable would preserve the
+// randomized map-iteration order of subSessionsByParent and the rows could
+// drift between renders. They must emit in ID order.
+func TestFlatten_OrphanSubSessionsDeterministic_TiedOrder(t *testing.T) {
+	t.Cleanup(func() { SetGroupSortMode("creation") })
+	SetGroupSortMode("creation")
+
+	// All orphans share Order 0 and live in distinct parent buckets, so the only
+	// stable discriminator is ID.
+	mk := func(id, parent string) *Instance {
+		return &Instance{ID: id, Title: id, GroupPath: "g", Order: 0, ParentSessionID: parent}
+	}
+	instances := []*Instance{
+		mk("s2", "absent-p2"),
+		mk("s0", "absent-p0"),
+		mk("s1", "absent-p1"),
+	}
+
+	tree := NewGroupTree(instances)
+
+	collect := func() []string {
+		var got []string
+		for _, it := range tree.Flatten() {
+			if it.Type == ItemTypeSession {
+				got = append(got, it.Session.ID)
+			}
+		}
+		return got
+	}
+
+	want := []string{"s0", "s1", "s2"} // ID order, independent of input/map order
+	for i := 0; i < 50; i++ {
+		if got := collect(); !equalStrings(got, want) {
+			t.Fatalf("tied-Order orphans not deterministic: iter %d got %v, want %v", i, got, want)
+		}
+	}
+}
+
+// TestRenameTargetPath pins the path computation shared by RenameGroup and the
+// reload-race collision guard (reapplyPendingGroupOps in the ui package):
+// sanitize the new name, replace spaces with hyphens, and preserve the parent
+// path for nested groups. It is load-bearing for preventing session data loss
+// on a rename collision, so it gets direct coverage.
+func TestRenameTargetPath(t *testing.T) {
+	tree := NewGroupTree(nil)
+	cases := []struct {
+		name    string
+		oldPath string
+		newName string
+		want    string
+	}{
+		{"root rename", "old-name", "New Name", "New-Name"},
+		{"root single word", "work", "life", "life"},
+		{"nested preserves parent", "parent/child", "Renamed", "parent/Renamed"},
+		{"nested with spaces", "parent/child", "New Child", "parent/New-Child"},
+		{"deeply nested preserves parents", "top/mid/leaf", "x", "top/mid/x"},
+		{"sanitizes path separators", "g", "a/b", "a-b"},
+		{"sanitizes dots", "g", "foo.bar", "foo-bar"},
+		{"drops disallowed chars", "g", "my@grp!", "mygrp"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tree.RenameTargetPath(tc.oldPath, tc.newName); got != tc.want {
+				t.Errorf("RenameTargetPath(%q, %q) = %q, want %q", tc.oldPath, tc.newName, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRenameTargetPath_MatchesRenameGroup guards against drift between the
+// extracted helper and the path RenameGroup actually moves a group to.
+func TestRenameTargetPath_MatchesRenameGroup(t *testing.T) {
+	for _, newName := range []string{"New Name", "a/b", "life"} {
+		tree := NewGroupTree([]*Instance{{ID: "1", Title: "s", GroupPath: "parent/child"}})
+		target := tree.RenameTargetPath("parent/child", newName)
+		tree.RenameGroup("parent/child", newName)
+		if _, ok := tree.Groups[target]; !ok {
+			t.Errorf("RenameGroup(parent/child, %q) did not land at RenameTargetPath result %q",
+				newName, target)
+		}
+	}
+}
+
+// testArchivedAt is a fixed, non-zero archive timestamp for the reorder tests
+// below. The value never matters — only that IsArchived() reports true.
+var testArchivedAt = time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+
+// visibleTopLevel returns the top-level session IDs the deck actually renders
+// for one archive partition. It is the test-side equivalent of the archive
+// partitioning rebuildFlatItems applies to Flatten's output: the active list
+// never shows archived rows, and the archived view (^) never shows active ones.
+func visibleTopLevel(group *Group, archived bool) []string {
+	var ids []string
+	for _, s := range group.Sessions {
+		if s.ParentSessionID == "" && s.IsArchived() == archived {
+			ids = append(ids, s.ID)
+		}
+	}
+	return ids
+}
+
+func sessionByID(group *Group, id string) *Instance {
+	for _, s := range group.Sessions {
+		if s.ID == id {
+			return s
+		}
+	}
+	return nil
+}
+
+func sessionOrder(group *Group) []string {
+	ids := make([]string, 0, len(group.Sessions))
+	for _, s := range group.Sessions {
+		ids = append(ids, s.ID)
+	}
+	return ids
+}
+
+func assertOrder(t *testing.T, what string, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("%s = %v, want %v", what, got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("%s = %v, want %v", what, got, want)
+		}
+	}
+}
+
+// TestMoveSessionUp_SkipsArchivedNeighbour: with archived sessions sitting
+// between two active ones, one MoveSessionUp must swap the two *active* rows.
+// Swapping with an archived neighbour instead moves the session past a row the
+// active list does not render, so the deck shows no movement at all.
+func TestMoveSessionUp_SkipsArchivedNeighbour(t *testing.T) {
+	instances := []*Instance{
+		{ID: "a1", Title: "active1", GroupPath: "test"},
+		{ID: "z1", Title: "archived1", GroupPath: "test", ArchivedAt: testArchivedAt},
+		{ID: "z2", Title: "archived2", GroupPath: "test", ArchivedAt: testArchivedAt},
+		{ID: "z3", Title: "archived3", GroupPath: "test", ArchivedAt: testArchivedAt},
+		{ID: "a2", Title: "active2", GroupPath: "test"},
+	}
+	tree := NewGroupTree(instances)
+	group := tree.Groups["test"]
+
+	assertOrder(t, "active list before", visibleTopLevel(group, false), []string{"a1", "a2"})
+
+	tree.MoveSessionUp(sessionByID(group, "a2"))
+
+	assertOrder(t, "active list after one MoveSessionUp(a2)",
+		visibleTopLevel(group, false), []string{"a2", "a1"})
+}
+
+// TestMoveSessionDown_SkipsArchivedNeighbour is the mirror of the above.
+func TestMoveSessionDown_SkipsArchivedNeighbour(t *testing.T) {
+	instances := []*Instance{
+		{ID: "a1", Title: "active1", GroupPath: "test"},
+		{ID: "z1", Title: "archived1", GroupPath: "test", ArchivedAt: testArchivedAt},
+		{ID: "z2", Title: "archived2", GroupPath: "test", ArchivedAt: testArchivedAt},
+		{ID: "z3", Title: "archived3", GroupPath: "test", ArchivedAt: testArchivedAt},
+		{ID: "a2", Title: "active2", GroupPath: "test"},
+	}
+	tree := NewGroupTree(instances)
+	group := tree.Groups["test"]
+
+	tree.MoveSessionDown(sessionByID(group, "a1"))
+
+	assertOrder(t, "active list after one MoveSessionDown(a1)",
+		visibleTopLevel(group, false), []string{"a2", "a1"})
+}
+
+// TestMoveSessionUp_ArchivedRowMovesWithinArchivedList: reordering is a
+// same-partition operation, not "ignore archived". Rows in the archived view
+// (^) must reorder against each other, skipping the active rows between them.
+func TestMoveSessionUp_ArchivedRowMovesWithinArchivedList(t *testing.T) {
+	instances := []*Instance{
+		{ID: "z1", Title: "archived1", GroupPath: "test", ArchivedAt: testArchivedAt},
+		{ID: "a1", Title: "active1", GroupPath: "test"},
+		{ID: "a2", Title: "active2", GroupPath: "test"},
+		{ID: "z2", Title: "archived2", GroupPath: "test", ArchivedAt: testArchivedAt},
+	}
+	tree := NewGroupTree(instances)
+	group := tree.Groups["test"]
+
+	tree.MoveSessionUp(sessionByID(group, "z2"))
+
+	assertOrder(t, "archived list after one MoveSessionUp(z2)",
+		visibleTopLevel(group, true), []string{"z2", "z1"})
+	assertOrder(t, "active list must be undisturbed",
+		visibleTopLevel(group, false), []string{"a1", "a2"})
+}
+
+// TestMoveSessionUp_FirstActiveAboveArchivedIsNoOp: the first row of the active
+// list has nowhere to go, even when archived rows sit above it in the slice.
+// Asserts the whole slice, because the pre-fix bug is invisible in the active
+// list alone: it silently shuffles the session past archived rows on every
+// press while the rendered order never changes.
+func TestMoveSessionUp_FirstActiveAboveArchivedIsNoOp(t *testing.T) {
+	instances := []*Instance{
+		{ID: "z1", Title: "archived1", GroupPath: "test", ArchivedAt: testArchivedAt},
+		{ID: "z2", Title: "archived2", GroupPath: "test", ArchivedAt: testArchivedAt},
+		{ID: "a1", Title: "active1", GroupPath: "test"},
+		{ID: "a2", Title: "active2", GroupPath: "test"},
+	}
+	tree := NewGroupTree(instances)
+	group := tree.Groups["test"]
+
+	tree.MoveSessionUp(sessionByID(group, "a1"))
+
+	assertOrder(t, "session order after no-op MoveSessionUp(a1)",
+		sessionOrder(group), []string{"z1", "z2", "a1", "a2"})
+}
+
+// TestDemoteSession_SkipsArchivedPeer: demoting nests a session under the
+// previous top-level peer *in the same partition*. Nesting it under an
+// archived peer would park an active session beneath a row the active list
+// does not render.
+func TestDemoteSession_SkipsArchivedPeer(t *testing.T) {
+	instances := []*Instance{
+		{ID: "a1", Title: "active1", GroupPath: "test"},
+		{ID: "z1", Title: "archived1", GroupPath: "test", ArchivedAt: testArchivedAt},
+		{ID: "a2", Title: "active2", GroupPath: "test"},
+	}
+	tree := NewGroupTree(instances)
+	group := tree.Groups["test"]
+
+	a2 := sessionByID(group, "a2")
+	tree.DemoteSession(a2)
+
+	if a2.ParentSessionID != "a1" {
+		t.Errorf("a2.ParentSessionID after demote = %q, want %q", a2.ParentSessionID, "a1")
+	}
+	assertOrder(t, "a1's children", childrenOf(group, "a1"), []string{"a2"})
+}
+
+// TestDemoteSession_FirstActiveAboveArchivedIsNoOp: the first row of the active
+// list has no peer to nest under, so demote is a no-op — an archived row above
+// it is not a candidate parent.
+func TestDemoteSession_FirstActiveAboveArchivedIsNoOp(t *testing.T) {
+	instances := []*Instance{
+		{ID: "z1", Title: "archived1", GroupPath: "test", ArchivedAt: testArchivedAt},
+		{ID: "a1", Title: "active1", GroupPath: "test"},
+		{ID: "a2", Title: "active2", GroupPath: "test"},
+	}
+	tree := NewGroupTree(instances)
+	group := tree.Groups["test"]
+
+	a1 := sessionByID(group, "a1")
+	tree.DemoteSession(a1)
+
+	if a1.ParentSessionID != "" {
+		t.Errorf("a1.ParentSessionID after no-op demote = %q, want %q", a1.ParentSessionID, "")
+	}
+}
+
+func sessionIDs(group *Group) []string {
+	ids := make([]string, 0, len(group.Sessions))
+	for _, s := range group.Sessions {
+		ids = append(ids, s.ID)
+	}
+	return ids
+}
+
+func assertGroupOrder(t *testing.T, group *Group, want []string) {
+	t.Helper()
+	got := sessionIDs(group)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("slice order = %v, want %v", got, want)
+	}
+	for i, s := range group.Sessions {
+		if s.Order != i {
+			t.Errorf("Order of %q = %d, want %d", s.ID, s.Order, i)
+		}
+	}
+}
+
+// TestSetSessionOrder_MovesToIndexAndRenumbers is the launch-appended case:
+// every row at Order 0, the newest one last by rowid. Moving it to index 0
+// must put it first and turn the ties into explicit 0..n-1 values.
+func TestSetSessionOrder_MovesToIndexAndRenumbers(t *testing.T) {
+	instances := []*Instance{
+		{ID: "a", GroupPath: "g"},
+		{ID: "b", GroupPath: "g"},
+		{ID: "c", GroupPath: "g"},
+		{ID: "d", GroupPath: "g"},
+	}
+	tree := NewGroupTree(instances)
+	tree.SetSessionOrder(instances[3], 0)
+	assertGroupOrder(t, tree.Groups["g"], []string{"d", "a", "b", "c"})
+}
+
+func TestSetSessionOrder_MiddleIndex(t *testing.T) {
+	instances := []*Instance{
+		{ID: "a", GroupPath: "g"},
+		{ID: "b", GroupPath: "g"},
+		{ID: "c", GroupPath: "g"},
+		{ID: "d", GroupPath: "g"},
+	}
+	tree := NewGroupTree(instances)
+	tree.SetSessionOrder(instances[0], 2)
+	assertGroupOrder(t, tree.Groups["g"], []string{"b", "c", "a", "d"})
+}
+
+func TestSetSessionOrder_ClampsToEnd(t *testing.T) {
+	instances := []*Instance{
+		{ID: "a", GroupPath: "g"},
+		{ID: "b", GroupPath: "g"},
+		{ID: "c", GroupPath: "g"},
+		{ID: "d", GroupPath: "g"},
+	}
+	tree := NewGroupTree(instances)
+	tree.SetSessionOrder(instances[0], 99)
+	assertGroupOrder(t, tree.Groups["g"], []string{"b", "c", "d", "a"})
+}
+
+func TestSetSessionOrder_UnknownGroupNoOp(t *testing.T) {
+	instances := []*Instance{
+		{ID: "a", GroupPath: "g", Order: 0},
+		{ID: "b", GroupPath: "g", Order: 0},
+	}
+	tree := NewGroupTree(instances)
+	stray := &Instance{ID: "x", GroupPath: "elsewhere"}
+	tree.SetSessionOrder(stray, 0)
+	if got := sessionIDs(tree.Groups["g"]); strings.Join(got, ",") != "a,b" {
+		t.Fatalf("slice order changed to %v", got)
+	}
+	for _, s := range instances {
+		if s.Order != 0 {
+			t.Errorf("Order of %q = %d, want 0 (untouched)", s.ID, s.Order)
+		}
+	}
+}
+
+func TestSessionPosition_ReflectsSortedSlice(t *testing.T) {
+	instances := []*Instance{
+		{ID: "a", GroupPath: "g", Order: 0},
+		{ID: "b", GroupPath: "g", Order: 0},
+		{ID: "c", GroupPath: "g", Order: 3},
+		{ID: "d", GroupPath: "g", Order: 1},
+	}
+	tree := NewGroupTree(instances)
+	want := map[string]int{"a": 0, "b": 1, "d": 2, "c": 3}
+	for _, inst := range instances {
+		if got := tree.SessionPosition(inst); got != want[inst.ID] {
+			t.Errorf("SessionPosition(%q) = %d, want %d", inst.ID, got, want[inst.ID])
+		}
+	}
+	if got := tree.SessionPosition(&Instance{ID: "x", GroupPath: "g"}); got != -1 {
+		t.Errorf("SessionPosition(unknown) = %d, want -1", got)
+	}
+}
+
+func TestSetSessionOrder_SubSessionKeepsParent(t *testing.T) {
+	instances := []*Instance{
+		{ID: "p", GroupPath: "g"},
+		{ID: "q", GroupPath: "g"},
+		{ID: "p1", GroupPath: "g", ParentSessionID: "p"},
+		{ID: "p2", GroupPath: "g", ParentSessionID: "p"},
+	}
+	tree := NewGroupTree(instances)
+	tree.SetSessionOrder(instances[3], 0)
+	assertGroupOrder(t, tree.Groups["g"], []string{"p2", "p", "q", "p1"})
+	if instances[3].ParentSessionID != "p" {
+		t.Fatalf("parent cleared: %q", instances[3].ParentSessionID)
+	}
+	var rendered []string
+	for _, item := range tree.Flatten() {
+		if item.Type == ItemTypeSession {
+			rendered = append(rendered, item.Session.ID)
+		}
+	}
+	if got := strings.Join(rendered, ","); got != "p,p2,p1,q" {
+		t.Fatalf("rendered order = %s, want p,p2,p1,q", got)
+	}
+}
+
 // TestFlattenWithParentFolds (#2631): a folded parent keeps its own row and
 // omits its sub-sessions, while orphan sub-sessions (parent in another group)
 // and plain Flatten behavior stay untouched.
