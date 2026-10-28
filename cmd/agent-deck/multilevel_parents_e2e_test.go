@@ -18,7 +18,7 @@ func TestMultiLevelParentsE2E(t *testing.T) {
 	parallelSubprocessTest(t)
 	e := newDeliveryEnv(t)
 	top := e.startFake("top", "idle", "")
-	mid := e.startFake("mid", "idle", top.id) // add --parent <top-level>
+	mid := e.startFake("mid", "idle", top.id)   // add --parent <top-level>
 	leaf := e.startFake("leaf", "busy", mid.id) // add --parent <sub-session>
 
 	var shown struct {
