@@ -1242,7 +1242,7 @@ error_grace = "3m"          # how long an error may last before it is an escalat
 [profiles.personal.parent_wakes]   # per-profile override, same keys
 mode = "escalation"
 
-[groups."onaza".parent_wakes]      # per-group override; the nearest group that sets a key wins, key by key
+[groups."team-a".parent_wakes]     # per-group override; the nearest group that sets a key wins, key by key
 mode = "all"
 ```
 

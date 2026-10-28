@@ -27,9 +27,9 @@ func TestParentWakePolicyFor_Resolution(t *testing.T) {
 			"personal": {ParentWakes: ParentWakesSettings{Mode: "escalation"}},
 		},
 		Groups: map[string]GroupSettings{
-			"roona":          {ParentWakes: ParentWakesSettings{ErrorGrace: "1m"}},
-			"roona/epic-437": {ParentWakes: ParentWakesSettings{Mode: "all", EscalateAfter: "0"}},
-			"health":         {ParentWakes: ParentWakesSettings{Mode: "ESCALATION", EscalateAfter: "nonsense", ErrorGrace: "-5m"}},
+			"team-a":          {ParentWakes: ParentWakesSettings{ErrorGrace: "1m"}},
+			"team-a/epic-437": {ParentWakes: ParentWakesSettings{Mode: "all", EscalateAfter: "0"}},
+			"health":          {ParentWakes: ParentWakesSettings{Mode: "ESCALATION", EscalateAfter: "nonsense", ErrorGrace: "-5m"}},
 		},
 	}
 	cases := []struct {
@@ -38,9 +38,9 @@ func TestParentWakePolicyFor_Resolution(t *testing.T) {
 	}{
 		{"global only", "work", "", ParentWakePolicy{ParentWakesAll, 45 * time.Minute, DefaultErrorGrace}},
 		{"profile overrides global mode", "personal", "", ParentWakePolicy{ParentWakesEscalation, 45 * time.Minute, DefaultErrorGrace}},
-		{"group sets one key, profile the other", "personal", "roona", ParentWakePolicy{ParentWakesEscalation, 45 * time.Minute, time.Minute}},
-		{"nearest group wins, key by key", "personal", "roona/epic-437", ParentWakePolicy{ParentWakesAll, 0, time.Minute}},
-		{"subgroup with no entry inherits", "personal", "roona/epic-512", ParentWakePolicy{ParentWakesEscalation, 45 * time.Minute, time.Minute}},
+		{"group sets one key, profile the other", "personal", "team-a", ParentWakePolicy{ParentWakesEscalation, 45 * time.Minute, time.Minute}},
+		{"nearest group wins, key by key", "personal", "team-a/epic-437", ParentWakePolicy{ParentWakesAll, 0, time.Minute}},
+		{"subgroup with no entry inherits", "personal", "team-a/epic-512", ParentWakePolicy{ParentWakesEscalation, 45 * time.Minute, time.Minute}},
 		{"bad values read as defaults", "work", "health", ParentWakePolicy{ParentWakesEscalation, DefaultEscalateAfter, DefaultErrorGrace}},
 	}
 	for _, tc := range cases {
