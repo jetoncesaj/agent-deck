@@ -121,6 +121,10 @@
           "$ref": "#/$defs/session.IntendedSwitchJSON",
           "description": "intended account/model switch: the switch is intended while account and model equal it and now \u003c expires_at; absent when none or expired"
         },
+        "is_conductor": {
+          "description": "true for a conductor session (identify conductors by this and conductor_name, never by group or title); absent for other sessions",
+          "type": "boolean"
+        },
         "item": {
           "description": "tracker item ref set by session set \u003cid\u003e item; empty when none",
           "type": "string"
