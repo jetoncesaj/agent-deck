@@ -53,22 +53,31 @@ type Item struct {
 	// RecomputeTreeConnectors on the final visible list (after archived/status
 	// filtering and view-mode partitioning), which recomputes all three from
 	// scratch. Do not trust these three fields' values here for tree rendering.
-	IsLastInGroup       bool   // True if this is the last session in its group (for tree rendering)
-	RootGroupNum        int    // Pre-computed root group number for hotkey display (1-9, 0 if not a root group)
-	IsSubSession        bool   // True if this session has a parent session
-	IsLastSubSession    bool   // True if this is the last sub-session of its parent (for tree rendering)
-	ParentIsLastInGroup bool   // True if parent session is last top-level item (for tree line rendering)
-	IsWindow            bool   // True for ItemTypeWindow items
-	IsLastWindow        bool   // True if last window of parent session
-	WindowIndex         int    // Tmux window index (for ItemTypeWindow)
-	WindowID            string // Stable tmux window id, e.g. "@12" (for ItemTypeWindow)
-	WindowName          string // Tmux window name (for ItemTypeWindow)
-	WindowSessionID     string // Parent session ID (for ItemTypeWindow)
-	WindowTool          string // Detected tool in this window (claude, gemini, etc.)
-	CreatingID          string // Non-empty for placeholder items (worktree creation in progress)
-	CreatingTitle       string // Display title for creating placeholder
-	CreatingTool        string // Tool for creating placeholder
-	DividerLabel        string // Label shown on an ItemTypeDivider row (e.g. "idle / done")
+	IsLastInGroup       bool // True if this is the last session in its group (for tree rendering)
+	RootGroupNum        int  // Pre-computed root group number for hotkey display (1-9, 0 if not a root group)
+	IsSubSession        bool // True if this session has a parent session
+	IsLastSubSession    bool // True if this is the last sub-session of its parent (for tree rendering)
+	ParentIsLastInGroup bool // True if the row's top-level ancestor is the last top-level item (for tree line rendering)
+	// TreeDepth is how many parent rows this row nests under (0 = drawn at
+	// top level, 1 = under a top-level row, 2 = under that row's child...).
+	// TreeGutter has one entry per ancestor row, top-level ancestor first:
+	// true when that ancestor was the last of its siblings, so its column
+	// draws blank instead of a continuation line. Both are recomputed with
+	// the other connector flags (RecomputeTreeConnectors); window rows carry
+	// their session row's gutter plus that row's own last flag.
+	TreeDepth       int
+	TreeGutter      []bool
+	IsWindow        bool   // True for ItemTypeWindow items
+	IsLastWindow    bool   // True if last window of parent session
+	WindowIndex     int    // Tmux window index (for ItemTypeWindow)
+	WindowID        string // Stable tmux window id, e.g. "@12" (for ItemTypeWindow)
+	WindowName      string // Tmux window name (for ItemTypeWindow)
+	WindowSessionID string // Parent session ID (for ItemTypeWindow)
+	WindowTool      string // Detected tool in this window (claude, gemini, etc.)
+	CreatingID      string // Non-empty for placeholder items (worktree creation in progress)
+	CreatingTitle   string // Display title for creating placeholder
+	CreatingTool    string // Tool for creating placeholder
+	DividerLabel    string // Label shown on an ItemTypeDivider row (e.g. "idle / done")
 }
 
 // IsCreatingPlaceholder reports whether this row is a still-creating session
@@ -697,135 +706,142 @@ func (t *GroupTree) flatten(foldedParents map[string]bool) []Item {
 
 		// Add sessions if expanded
 		if group.Expanded {
-			// Separate parent sessions from sub-sessions
-			parentSessions := []*Instance{}
-			subSessionsByParent := make(map[string][]*Instance) // parentID -> sub-sessions
-
-			for _, sess := range group.Sessions {
-				if sess.IsSubSession() {
-					subSessionsByParent[sess.ParentSessionID] = append(subSessionsByParent[sess.ParentSessionID], sess)
-				} else {
-					parentSessions = append(parentSessions, sess)
-				}
-			}
-
-			// Apply pin ordering live (pin-sessions): a pin edit mutates
-			// Instance.Pin but does not rebuild the tree, so the load-time
-			// SortInstancesByActionable has not re-run. Stable-partition the
-			// display slices by pin zone here so a pinned session moves to the
-			// top/bottom of its group immediately — without this, the pin only
-			// takes effect after a restart. Operates on Flatten's local copies,
-			// never the tree's group.Sessions, and preserves unpinned order.
-			stablePinPartition(parentSessions)
-			for parentID := range subSessionsByParent {
-				stablePinPartition(subSessionsByParent[parentID])
-			}
-
-			// Count total top-level items (parent sessions + orphan sub-sessions whose parent is in different group)
-			// For determining IsLastInGroup, we need to know how many top-level items there are
-			topLevelCount := len(parentSessions)
-			for parentID, subs := range subSessionsByParent {
-				// Check if parent is in this group
-				parentInGroup := false
-				for _, p := range parentSessions {
-					if p.ID == parentID {
-						parentInGroup = true
-						break
-					}
-				}
-				if !parentInGroup {
-					// Parent is not in this group, so sub-sessions appear as top-level
-					topLevelCount += len(subs)
-				}
-			}
-
-			topLevelIndex := 0
-			for _, sess := range parentSessions {
-				isLastTopLevel := topLevelIndex == topLevelCount-1
-
-				// Get sub-sessions for this parent
-				subs := subSessionsByParent[sess.ID]
-				// A folded parent (#2631) omits its children but keeps its own row —
-				// mirroring a collapsed group, which hides sessions and keeps the
-				// header. Tree connectors must then describe the visible list, so
-				// the fold zeroes the visual sub count rather than just skipping
-				// emission below.
-				visibleSubs := len(subs)
-				parentFolded := foldedParents != nil && foldedParents[sess.ID]
-				if parentFolded {
-					visibleSubs = 0
-				}
-				// If this session has sub-sessions, it's not the last in group visually
-				isLastInGroup := isLastTopLevel && visibleSubs == 0
-
-				items = append(items, Item{
-					Type:          ItemTypeSession,
-					Session:       sess,
-					Level:         groupLevel + 1,
-					Path:          group.Path,
-					IsLastInGroup: isLastInGroup,
-				})
-
-				// Add sub-sessions immediately after parent (skipped when folded)
-				for subIdx, sub := range subs {
-					if parentFolded {
-						break
-					}
-					isLastSub := subIdx == len(subs)-1
-					// Sub-session is last in group if parent was last top-level and this is last sub
-					isSubLastInGroup := isLastTopLevel && isLastSub
-
-					items = append(items, Item{
-						Type:                ItemTypeSession,
-						Session:             sub,
-						Level:               groupLevel + 2, // One more level of indentation
-						Path:                group.Path,
-						IsLastInGroup:       isSubLastInGroup,
-						IsSubSession:        true,
-						IsLastSubSession:    isLastSub,
-						ParentIsLastInGroup: isLastTopLevel, // For tree line rendering (│ vs spaces)
-					})
-				}
-
-				// Remove these subs from the map so we don't add them again
-				delete(subSessionsByParent, sess.ID)
-
-				topLevelIndex++
-			}
-
-			// Add any orphaned sub-sessions (parent not in this group). Collect
-			// the remaining map entries into a slice and sort by Order so the
-			// emission order is deterministic — iterating subSessionsByParent
-			// directly would use Go's randomized map order and shuffle these
-			// rows between renders.
-			orphans := make([]*Instance, 0, len(subSessionsByParent))
-			for _, subs := range subSessionsByParent {
-				orphans = append(orphans, subs...)
-			}
-			sort.SliceStable(orphans, func(i, j int) bool {
-				if orphans[i].Order != orphans[j].Order {
-					return orphans[i].Order < orphans[j].Order
-				}
-				// Tie-break on ID so equal-Order orphans (collected from the
-				// randomized subSessionsByParent map) still emit in a stable,
-				// run-independent order rather than leaking map-iteration order.
-				return orphans[i].ID < orphans[j].ID
-			})
-			for _, sub := range orphans {
-				topLevelIndex++
-				items = append(items, Item{
-					Type:          ItemTypeSession,
-					Session:       sub,
-					Level:         groupLevel + 1,
-					Path:          group.Path,
-					IsLastInGroup: topLevelIndex == topLevelCount,
-					IsSubSession:  true, // Still a sub-session, just orphaned in this group
-				})
-			}
+			items = append(items, flattenGroupSessions(group, groupLevel, foldedParents)...)
 		}
 	}
 
 	return items
+}
+
+// flattenGroupSessions emits one expanded group's session rows as a tree:
+// each session is followed by its sub-sessions, theirs after them, at any
+// depth. A session nests under its parent only when the parent is in the
+// same group; otherwise it heads its own tree at top level (an orphan row,
+// IsSubSession still true) after the group's top-level sessions. Rows in a
+// parent cycle that has no way in from a top-level row come last, as
+// orphans, so no session is ever dropped from the list.
+//
+// Level is groupLevel+1 for a top-level row and one more per nesting step;
+// TreeDepth is the nesting step (0 at top level) and TreeGutter, for a
+// nested row, says for each ancestor from the top-level one down whether it
+// was the last of its siblings (true: no continuation line in that column).
+// A folded parent (#2631) keeps its row and hides its whole subtree. The
+// connector flags are set here for cursor navigation; the TUI recomputes
+// them on the final visible list (RecomputeTreeConnectors).
+func flattenGroupSessions(group *Group, groupLevel int, foldedParents map[string]bool) []Item {
+	inGroup := make(map[string]bool, len(group.Sessions))
+	for _, sess := range group.Sessions {
+		inGroup[sess.ID] = true
+	}
+	var roots, orphans []*Instance
+	kids := make(map[string][]*Instance) // parentID -> its sub-sessions in this group
+	for _, sess := range group.Sessions {
+		pid := sess.ParentSessionID
+		switch {
+		case !sess.IsSubSession():
+			roots = append(roots, sess)
+		case pid != sess.ID && inGroup[pid]:
+			kids[pid] = append(kids[pid], sess)
+		default:
+			orphans = append(orphans, sess)
+		}
+	}
+
+	// Apply pin ordering live (pin-sessions): a pin edit mutates
+	// Instance.Pin but does not rebuild the tree, so the load-time
+	// SortInstancesByActionable has not re-run. Stable-partition the
+	// display slices by pin zone here so a pinned session moves to the
+	// top/bottom of its siblings immediately — without this, the pin only
+	// takes effect after a restart. Operates on local copies, never the
+	// tree's group.Sessions, and preserves unpinned order.
+	stablePinPartition(roots)
+	for parentID := range kids {
+		stablePinPartition(kids[parentID])
+	}
+	// Orphans are collected from the group slice in order, but keep the
+	// historical Order-then-ID emission so equal-Order rows stay stable.
+	sortByOrderThenID := func(list []*Instance) {
+		sort.SliceStable(list, func(i, j int) bool {
+			if list[i].Order != list[j].Order {
+				return list[i].Order < list[j].Order
+			}
+			return list[i].ID < list[j].ID
+		})
+	}
+	sortByOrderThenID(orphans)
+
+	emitted := make(map[string]bool, len(group.Sessions))
+	// hide marks a folded parent's subtree as placed without emitting it, so
+	// the stranded pass below does not bring those rows back as orphans.
+	var hide func(id string)
+	hide = func(id string) {
+		for _, k := range kids[id] {
+			if !emitted[k.ID] {
+				emitted[k.ID] = true
+				hide(k.ID)
+			}
+		}
+	}
+	var out []Item
+	var emit func(sess *Instance, depth int, isLast bool, gutter []bool)
+	emit = func(sess *Instance, depth int, isLast bool, gutter []bool) {
+		emitted[sess.ID] = true
+		item := Item{
+			Type:          ItemTypeSession,
+			Session:       sess,
+			Level:         groupLevel + 1 + depth,
+			Path:          group.Path,
+			IsSubSession:  sess.IsSubSession(),
+			TreeDepth:     depth,
+			IsLastInGroup: false,
+		}
+		if depth > 0 {
+			item.IsLastSubSession = isLast
+			item.ParentIsLastInGroup = gutter[0]
+			item.TreeGutter = append([]bool(nil), gutter...)
+		}
+		out = append(out, item)
+		if foldedParents != nil && foldedParents[sess.ID] {
+			hide(sess.ID)
+			return
+		}
+		var children []*Instance
+		for _, k := range kids[sess.ID] {
+			if !emitted[k.ID] {
+				children = append(children, k)
+			}
+		}
+		childGutter := append(append([]bool(nil), gutter...), isLast)
+		for i, k := range children {
+			if emitted[k.ID] {
+				continue // reached through a cycle further down
+			}
+			emit(k, depth+1, i == len(children)-1, childGutter)
+		}
+	}
+	tops := append(append([]*Instance(nil), roots...), orphans...)
+	for i, sess := range tops {
+		if !emitted[sess.ID] {
+			emit(sess, 0, i == len(tops)-1, nil)
+		}
+	}
+	// Sessions only reachable through a parent cycle inside this group.
+	var stranded []*Instance
+	for _, sess := range group.Sessions {
+		if !emitted[sess.ID] {
+			stranded = append(stranded, sess)
+		}
+	}
+	sortByOrderThenID(stranded)
+	for i, sess := range stranded {
+		if !emitted[sess.ID] {
+			emit(sess, 0, i == len(stranded)-1, nil)
+		}
+	}
+	if len(out) > 0 {
+		out[len(out)-1].IsLastInGroup = true
+	}
+	return out
 }
 
 // ToggleGroup toggles the expanded state of a group
@@ -943,7 +959,8 @@ func (t *GroupTree) moveGroupAmongSiblings(path string, delta int) {
 // same parent. Non-siblings interleaved in the flat slice are skipped.
 //
 // When a sub-session has no previous same-parent sibling (it is at the
-// top of its parent's children block), it is promoted to top-level and
+// top of its parent's children block), it is promoted one layer up (to a
+// sibling of its parent: top-level, or under the parent's own parent) and
 // inserted in the slice immediately before the parent. At the group's
 // top boundary (no previous top-level peer) the call is a no-op;
 // cross-group moves remain on the M shortcut.
@@ -974,10 +991,10 @@ func (t *GroupTree) MoveSessionUp(inst *Instance) {
 	case prevSiblingIdx >= 0:
 		group.Sessions[currentIdx], group.Sessions[prevSiblingIdx] = group.Sessions[prevSiblingIdx], group.Sessions[currentIdx]
 	case inst.ParentSessionID != "" && parentIdx >= 0:
-		// Promote sub-session to top-level: clear parent and reposition
-		// the slice entry immediately before the parent so the renderer
-		// shows it as a top-level peer just above the parent's block.
-		inst.ClearParent()
+		// Promote the sub-session one layer up and reposition the slice
+		// entry immediately before the parent so the renderer shows it as
+		// the parent's peer just above the parent's block.
+		t.promoteOneLayer(inst)
 		s := group.Sessions[currentIdx]
 		group.Sessions = append(group.Sessions[:currentIdx], group.Sessions[currentIdx+1:]...)
 		if parentIdx > currentIdx {
@@ -998,8 +1015,8 @@ func (t *GroupTree) MoveSessionUp(inst *Instance) {
 // case that swaps with the next same-parent session in the slice.
 //
 // When a sub-session has no following same-parent sibling (it is at the
-// bottom of its parent's children block), it is promoted to top-level
-// at its current slice position so the renderer shows it as a top-level
+// bottom of its parent's children block), it is promoted one layer up
+// at its current slice position so the renderer shows it as the parent's
 // peer immediately after the parent's block. At the group's bottom
 // boundary (no following top-level peer) the call is a no-op.
 func (t *GroupTree) MoveSessionDown(inst *Instance) {
@@ -1026,11 +1043,11 @@ func (t *GroupTree) MoveSessionDown(inst *Instance) {
 	case nextSiblingIdx >= 0:
 		group.Sessions[currentIdx], group.Sessions[nextSiblingIdx] = group.Sessions[nextSiblingIdx], group.Sessions[currentIdx]
 	case inst.ParentSessionID != "":
-		// Promote sub-session to top-level. The slice entry already sits
-		// after the parent's other children, so just clearing the parent
-		// pointer is enough — the renderer will place it as a top-level
-		// peer immediately after the parent's block.
-		inst.ClearParent()
+		// Promote the sub-session one layer up. The slice entry already
+		// sits after the parent's other children, so re-pointing the
+		// parent link is enough — the renderer will place it as the
+		// parent's peer immediately after the parent's block.
+		t.promoteOneLayer(inst)
 	default:
 		return
 	}
@@ -1040,10 +1057,32 @@ func (t *GroupTree) MoveSessionDown(inst *Instance) {
 	}
 }
 
-// PromoteSession converts a sub-session into a top-level peer in the same
-// group. Slice position is preserved so the renderer places the session as
-// a top-level peer immediately after its former parent's children block.
-// Top-level sessions are unchanged.
+// allSessions lists every session in the tree, across groups.
+func (t *GroupTree) allSessions() []*Instance {
+	var all []*Instance
+	for _, g := range t.GroupList {
+		all = append(all, g.Sessions...)
+	}
+	return all
+}
+
+// promoteOneLayer re-points inst at its parent's own parent, or clears the
+// link when the parent is top-level or not in the tree.
+func (t *GroupTree) promoteOneLayer(inst *Instance) {
+	chain := ParentChain(inst, t.allSessions())
+	if len(chain) < 2 {
+		inst.ClearParent()
+		return
+	}
+	grandparent := chain[1]
+	inst.SetParentWithPath(grandparent.ID, grandparent.ProjectPath)
+}
+
+// PromoteSession moves a sub-session one layer up in the same group: a child
+// of a top-level session becomes top-level, a grandchild becomes a child of
+// its grandparent. Slice position is preserved so the renderer places the
+// session as its former parent's peer immediately after that parent's
+// children block. Top-level sessions are unchanged.
 func (t *GroupTree) PromoteSession(inst *Instance) {
 	if inst.ParentSessionID == "" {
 		return
@@ -1052,31 +1091,23 @@ func (t *GroupTree) PromoteSession(inst *Instance) {
 	if !exists {
 		return
 	}
-	inst.ClearParent()
+	t.promoteOneLayer(inst)
 	for i, s := range group.Sessions {
 		s.Order = i
 	}
 }
 
-// DemoteSession converts a top-level session into a sub-session of the
-// previous top-level peer in the same group, inserting it as that peer's
-// last child. No-op if there is no previous peer (group's first
-// top-level), if the session is already a sub-session, or if it has its
-// own children — single-level nesting only, mirroring the validation in
-// `session set-parent`.
+// DemoteSession nests a session one layer down, under its previous sibling
+// in the same group (the previous session with the same parent: the
+// previous top-level peer for a top-level session), inserting it as that
+// sibling's last child. Its own sub-sessions move with it. No-op if there is
+// no previous sibling, or if the move would pass [launch] max_parent_depth
+// for the session or the deepest of its sub-sessions — the validation
+// `session set-parent` applies.
 func (t *GroupTree) DemoteSession(inst *Instance) {
-	if inst.ParentSessionID != "" {
-		return
-	}
 	group, exists := t.Groups[inst.GroupPath]
 	if !exists {
 		return
-	}
-
-	for _, s := range group.Sessions {
-		if s.ParentSessionID == inst.ID {
-			return
-		}
 	}
 
 	currentIdx, prevTopIdx := -1, -1
@@ -1085,7 +1116,7 @@ func (t *GroupTree) DemoteSession(inst *Instance) {
 			currentIdx = i
 			break
 		}
-		if s.ParentSessionID == "" && SameArchivePartition(s, inst) {
+		if s.ParentSessionID == inst.ParentSessionID && SameArchivePartition(s, inst) {
 			prevTopIdx = i
 		}
 	}
@@ -1094,6 +1125,9 @@ func (t *GroupTree) DemoteSession(inst *Instance) {
 	}
 
 	parent := group.Sessions[prevTopIdx]
+	if ValidateParentLink(inst, parent, t.allSessions(), ConfiguredMaxParentDepth()) != nil {
+		return
+	}
 	inst.SetParentWithPath(parent.ID, parent.ProjectPath)
 
 	insertIdx := prevTopIdx + 1

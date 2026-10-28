@@ -167,6 +167,16 @@ func ResolveMaxParentDepth(configured int) int {
 	return DefaultMaxParentDepth
 }
 
+// ConfiguredMaxParentDepth is the cap in force from [launch]
+// max_parent_depth; a config that cannot be read gives the default.
+func ConfiguredMaxParentDepth() int {
+	cfg, err := LoadUserConfig()
+	if err != nil || cfg == nil {
+		return DefaultMaxParentDepth
+	}
+	return ResolveMaxParentDepth(cfg.Launch.MaxParentDepth)
+}
+
 // ParentLinkError is why a parent link was refused. Kind is one of the
 // ParentLink* constants so callers can tell a cycle from the depth cap.
 type ParentLinkError struct {

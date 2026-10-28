@@ -479,6 +479,32 @@ const (
 	subLast   = "└─" // Last sub-session
 )
 
+// sessionRowGutter is a sub-session row's gutter, one entry per ancestor row
+// (true = that ancestor was the last of its siblings). Rows built before
+// TreeGutter existed (a top-level orphan row, the remote tree) carry only
+// ParentIsLastInGroup, which is their one-column gutter.
+func sessionRowGutter(item session.Item) []bool {
+	if len(item.TreeGutter) > 0 {
+		return item.TreeGutter
+	}
+	return []bool{item.ParentIsLastInGroup}
+}
+
+// renderTreeGutter draws one two-cell column per ancestor: " │" where that
+// ancestor still has siblings below (the │ sits under its ├), blank where it
+// was the last.
+func renderTreeGutter(gutter []bool, treeStyle lipgloss.Style) string {
+	var b strings.Builder
+	for _, last := range gutter {
+		if last {
+			b.WriteString("  ")
+		} else {
+			b.WriteString(" " + treeStyle.Render("│"))
+		}
+	}
+	return b.String()
+}
+
 // renderSessionItem renders a single session item for the left panel
 // PERFORMANCE: Uses cached styles from styles.go to avoid allocations
 func (h *Home) renderCreatingPreview(creating *CreatingSession, width, height int) string {
@@ -574,9 +600,14 @@ func (h *Home) renderWindowItem(b *strings.Builder, item session.Item, selected 
 	// Base indent — windows are children of sessions.
 	// Show │ continuation line at the parent session's level when it's not the
 	// last item in the group. Extra space after │ so window ├─ aligns under
-	// the parent session's ○ status bullet (position 4).
+	// the parent session's ○ status bullet (position 4). A window under a
+	// nested session row (TreeGutter set) also continues each ancestor's
+	// line, one column per ancestor.
 	baseIndent := ""
-	if item.Level > 1 {
+	if len(item.TreeGutter) > 0 {
+		groupIndent := strings.Repeat(treeEmpty, max(0, item.Level-1-len(item.TreeGutter)))
+		baseIndent = groupIndent + renderTreeGutter(item.TreeGutter, treeStyle) + " "
+	} else if item.Level > 1 {
 		groupIndent := strings.Repeat(treeEmpty, item.Level-2)
 		if item.ParentIsLastInGroup {
 			baseIndent = groupIndent + "   " // No continuation needed
@@ -601,7 +632,10 @@ func (h *Home) renderWindowItem(b *strings.Builder, item session.Item, selected 
 		indexStyle = SessionStatusSelStyle
 		treeStyle = TreeConnectorSelStyle
 		// Rebuild baseIndent with selection styling
-		if item.Level > 1 && !item.ParentIsLastInGroup {
+		if len(item.TreeGutter) > 0 {
+			groupIndent := strings.Repeat(treeEmpty, max(0, item.Level-1-len(item.TreeGutter)))
+			baseIndent = groupIndent + renderTreeGutter(item.TreeGutter, treeStyle) + " "
+		} else if item.Level > 1 && !item.ParentIsLastInGroup {
 			groupIndent := strings.Repeat(treeEmpty, max(0, item.Level-2))
 			baseIndent = groupIndent + " " + treeStyle.Render("│") + " "
 		}

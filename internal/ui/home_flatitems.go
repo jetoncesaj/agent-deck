@@ -152,12 +152,11 @@ func (h *Home) sessionHasChildren(item session.Item) bool {
 // partition never appears under the parent and must not produce a fold badge
 // or capture the fold keys (Tab, l/right, h/left) from the window toggle.
 //
-// A sub-session row never folds: the tree nests only one level, so a
-// sub-session's own children render as orphan rows and FlattenWithParentFolds
-// ignores a fold on it. Counting them put a badge on the row and took the
-// fold keys from the window toggle for a fold that hides nothing.
+// A sub-session row folds like a top-level one: the tree nests at any depth,
+// and folding a row hides its whole subtree. The count is the row's direct
+// children in its own group (only those nest under it).
 func (h *Home) sessionChildCount(item session.Item) int {
-	if item.Session == nil || h.groupTree == nil || item.Session.IsSubSession() {
+	if item.Session == nil || h.groupTree == nil {
 		return 0
 	}
 	viewArchived := h.statusFilter == FilterModeArchived
@@ -703,6 +702,12 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 			if item.IsSubSession {
 				parentIsLast = item.IsLastSubSession
 			}
+			// Under a nested row the windows also continue each ancestor's
+			// line: the row's own gutter, then the row's own last flag.
+			var winGutter []bool
+			if len(item.TreeGutter) > 0 {
+				winGutter = append(append([]bool(nil), item.TreeGutter...), parentIsLast)
+			}
 			for winIdx, win := range wins {
 				expanded = append(expanded, session.Item{
 					Type:                session.ItemTypeWindow,
@@ -717,6 +722,7 @@ func (h *Home) rebuildFlatItemsAt(now time.Time) {
 					IsLastWindow:        winIdx == len(wins)-1,
 					IsLastInGroup:       parentIsLast && winIdx == len(wins)-1,
 					ParentIsLastInGroup: parentIsLast,
+					TreeGutter:          winGutter,
 				})
 			}
 		}

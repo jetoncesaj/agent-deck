@@ -46,12 +46,16 @@ func RecomputeTreeConnectors(items []Item) []Item {
 	return items
 }
 
-// recomputeSegment assigns the three tree-connector flags for the
-// ItemTypeSession rows in items[start:end), which all share one Path and are
-// not split by a group header. Two passes are required: the first finds the
-// index of the segment's last row that draws with top-level indent (needed to
-// answer ParentIsLastInGroup for every child before any child's own flags can
-// be assigned), the second assigns all three flags using that index.
+// recomputeSegment assigns the tree-connector flags for the ItemTypeSession
+// rows in items[start:end), which all share one Path and are not split by a
+// group header. A row nests under its parent only when the parent has a row
+// of its own in this segment; its render depth is then its parent's plus
+// one, at any depth. A row whose parent has no row here (a structural
+// orphan, a row whose parent was filtered out, or one separated from its
+// parent by view-mode partitioning) draws at top level. Two passes: the
+// first finds render depths, the last top-level row and each parent's last
+// nested child; the second assigns IsLastInGroup, IsLastSubSession,
+// ParentIsLastInGroup, TreeDepth, TreeGutter and Level from them.
 func recomputeSegment(items []Item, start, end int) {
 	// sessionIdx maps a session's ID to its row index, scoped to this segment
 	// only: a parent that exists elsewhere in the flat list but not in this
@@ -65,39 +69,62 @@ func recomputeSegment(items []Item, start, end int) {
 		sessionIdx[it.Session.ID] = i
 	}
 
-	// topLevelForRendering reports whether a row draws with top-level indent:
-	// either it structurally isn't a sub-session, or it is one but its parent
-	// has no row of its own in this segment (a structural orphan, or a real
-	// child separated from its parent by view-mode partitioning).
-	topLevelForRendering := func(it *Item) bool {
+	// parentRow is the row index of it's parent in this segment, or -1.
+	parentRow := func(i int) int {
+		it := &items[i]
 		if !it.IsSubSession || it.Session == nil {
-			return true
+			return -1
 		}
-		_, parentPresent := sessionIdx[it.Session.ParentSessionID]
-		return !parentPresent
+		p, ok := sessionIdx[it.Session.ParentSessionID]
+		if !ok || p == i {
+			return -1
+		}
+		return p
+	}
+	// depth memoizes each row's render depth; -2 marks a row being resolved,
+	// so a parent cycle among visible rows resolves to top level instead of
+	// recursing forever.
+	depth := make(map[int]int, end-start)
+	var renderDepth func(i int) int
+	renderDepth = func(i int) int {
+		if d, ok := depth[i]; ok {
+			if d == -2 {
+				return -1
+			}
+			return d
+		}
+		depth[i] = -2
+		d := 0
+		if p := parentRow(i); p >= 0 {
+			if pd := renderDepth(p); pd >= 0 {
+				d = pd + 1
+			}
+		}
+		depth[i] = d
+		return d
 	}
 
 	lastTopLevelIdx := -1
-	for i := start; i < end; i++ {
-		it := &items[i]
-		if it.Type != ItemTypeSession || it.Session == nil {
-			continue
-		}
-		if topLevelForRendering(it) {
-			lastTopLevelIdx = i
-		}
-	}
-
 	lastSubIdxByParent := make(map[string]int, end-start)
 	for i := start; i < end; i++ {
 		it := &items[i]
-		if it.Type != ItemTypeSession || it.Session == nil || !it.IsSubSession {
+		if it.Type != ItemTypeSession || it.Session == nil {
 			continue
 		}
-		if topLevelForRendering(it) {
-			continue // orphaned chain of one row, handled via lastTopLevelIdx above
+		if renderDepth(i) == 0 {
+			lastTopLevelIdx = i
+			continue
 		}
 		lastSubIdxByParent[it.Session.ParentSessionID] = i
+	}
+	// isLastAmongSiblings reports, for a row at render depth d, whether it
+	// closes its sibling list: the last top-level row at depth 0, its
+	// parent's last nested child below that.
+	isLastAmongSiblings := func(i int) bool {
+		if renderDepth(i) == 0 {
+			return i == lastTopLevelIdx
+		}
+		return i == lastSubIdxByParent[items[i].Session.ParentSessionID]
 	}
 
 	for i := start; i < end; i++ {
@@ -105,11 +132,17 @@ func recomputeSegment(items []Item, start, end int) {
 		if it.Type != ItemTypeSession || it.Session == nil {
 			continue
 		}
+		d := renderDepth(i)
+		// Level follows the render depth: a row that Flatten nested but that
+		// now draws higher (its parent filtered out) moves left with it.
+		it.Level += d - it.TreeDepth
+		it.TreeDepth = d
 
-		if topLevelForRendering(it) {
+		if d == 0 {
 			it.IsLastInGroup = i == lastTopLevelIdx
 			it.IsLastSubSession = false
 			it.ParentIsLastInGroup = false
+			it.TreeGutter = nil
 			if it.IsSubSession {
 				// Two independent defects share this branch, both gated on
 				// IsSubSession in renderSessionItem — do not "simplify" this
@@ -132,9 +165,15 @@ func recomputeSegment(items []Item, start, end int) {
 			continue
 		}
 
-		parentIdx := sessionIdx[it.Session.ParentSessionID]
+		// Ancestor rows from the parent up to the top-level one; the gutter
+		// lists them top-level first.
+		gutter := make([]bool, d)
+		for a, k := parentRow(i), d-1; a >= 0 && k >= 0; a, k = parentRow(a), k-1 {
+			gutter[k] = isLastAmongSiblings(a)
+		}
 		it.IsLastInGroup = false
-		it.ParentIsLastInGroup = parentIdx == lastTopLevelIdx
-		it.IsLastSubSession = i == lastSubIdxByParent[it.Session.ParentSessionID]
+		it.IsLastSubSession = isLastAmongSiblings(i)
+		it.ParentIsLastInGroup = gutter[0]
+		it.TreeGutter = gutter
 	}
 }

@@ -5775,9 +5775,9 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case "shift+left":
-		// Promote: outdent a sub-session to top-level peer in the same group.
-		// Top-level sessions and groups are unaffected. Cross-group moves
-		// stay on M.
+		// Promote: outdent a sub-session one layer, to a peer of its parent in
+		// the same group. Top-level sessions and groups are unaffected.
+		// Cross-group moves stay on M.
 		if h.cursor < len(h.flatItems) {
 			item := h.flatItems[h.cursor]
 			if item.Type == session.ItemTypeSession && item.Session != nil {
@@ -5794,10 +5794,10 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case "shift+right":
-		// Demote: nest the cursor's top-level session under the previous
-		// top-level peer as that peer's last child. No-op when already a
-		// sub-session, when the session has its own children (single-level
-		// nesting only), or when there is no previous peer in the group.
+		// Demote: nest the cursor's session under its previous sibling as
+		// that sibling's last child; its own sub-sessions move with it.
+		// No-op when there is no previous sibling in the group or when the
+		// move would pass [launch] max_parent_depth.
 		if h.cursor < len(h.flatItems) {
 			item := h.flatItems[h.cursor]
 			if item.Type == session.ItemTypeSession && item.Session != nil {
@@ -8192,17 +8192,15 @@ func (h *Home) renderSessionItem(
 	baseIndent := ""
 	if item.Level > 1 {
 		// For deeply nested items, add spacing for parent levels
-		// Sub-sessions get extra indentation (they're at Level = groupLevel + 2)
+		// Sub-sessions get extra indentation (they're at Level = groupLevel + 1 + depth)
 		if item.IsSubSession {
-			// Sub-session: indent for group level, then continuation line for parent
-			// Add leading space so │ aligns with ├ in regular items (both at position 1)
-			groupIndent := strings.Repeat(treeEmpty, item.Level-2)
-			if item.ParentIsLastInGroup {
-				baseIndent = groupIndent + "  " // 2 spaces - parent is last, no continuation needed
-			} else {
-				// Style the │ character - leading space aligns │ with ├ above
-				baseIndent = groupIndent + " " + treeStyle.Render("│")
-			}
+			// Sub-session: indent for group level, then one column per
+			// ancestor row: a continuation line where that ancestor still has
+			// siblings below, blank where it was the last. The leading space
+			// aligns each │ with the ├ of the row it continues.
+			gutter := sessionRowGutter(item)
+			groupIndent := strings.Repeat(treeEmpty, max(0, item.Level-1-len(gutter)))
+			baseIndent = groupIndent + renderTreeGutter(gutter, treeStyle)
 		} else {
 			baseIndent = strings.Repeat(treeEmpty, item.Level-1)
 		}
@@ -8279,8 +8277,9 @@ func (h *Home) renderSessionItem(
 		// Replace the │ (or empty space) with ▶ so the arrow doesn't squeeze
 		// between tree connector characters (e.g. " │▶├─" → " ▶ ├─")
 		if item.IsSubSession {
-			groupIndent := strings.Repeat(treeEmpty, max(0, item.Level-2))
-			baseIndent = groupIndent + SessionSelectionPrefix.Render(" ▶")
+			gutter := sessionRowGutter(item)
+			groupIndent := strings.Repeat(treeEmpty, max(0, item.Level-1-len(gutter)))
+			baseIndent = groupIndent + renderTreeGutter(gutter[:len(gutter)-1], treeStyle) + SessionSelectionPrefix.Render(" ▶")
 			selectionPrefix = " "
 		}
 	}

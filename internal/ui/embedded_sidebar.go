@@ -30,6 +30,8 @@ func flattenSidebarItems(items []session.Item) []session.Item {
 			item.Level = 0
 			item.IsLastInGroup = false
 			item.ParentIsLastInGroup = false
+			item.TreeDepth = 0
+			item.TreeGutter = nil
 		}
 		flat = append(flat, item)
 	}
