@@ -14,6 +14,9 @@ import (
 // bytes), absent for a session that asks nothing.
 func TestListJSON_Asks(t *testing.T) {
 	cliInboxTestHome(t)
+	// SetAsk publishes session.asks.set; the bus writer is asynchronous and
+	// would still be writing under the temp home when t.TempDir removes it.
+	t.Setenv("AGENTDECK_EVENTS_BUS", "off")
 	instances := []*session.Instance{
 		{ID: "asking-1", Title: "worker", Tool: "claude"},
 		{ID: "quiet-1", Title: "other", Tool: "claude"},
