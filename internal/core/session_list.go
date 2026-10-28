@@ -93,10 +93,18 @@ type SessionRow struct {
 	// (`session set ... --intended`); omitted when none or expired.
 	IntendedSwitch *session.IntendedSwitchJSON `json:"intended_switch,omitempty" doc:"intended account/model switch: the switch is intended while account and model equal it and now < expires_at; absent when none or expired"`
 
+	// IsConductor marks a conductor session (Instance.IsConductor). With
+	// ConductorName it is how a consumer finds conductors, never by group
+	// or title. Absent (false) for any other session.
+	IsConductor bool `json:"is_conductor,omitempty" doc:"true for a conductor session (identify conductors by this and conductor_name, never by group or title); absent for other sessions"`
+
 	// ConductorName is the stable conductor key of a conductor session, so
 	// a consumer finds a renamed or decorated conductor without parsing its
 	// title. Absent for any other session.
 	ConductorName string `json:"conductor_name,omitempty" doc:"stable conductor name of a conductor session (survives renames); absent for other sessions"`
+
+	// Asks is the session's open "asks you" state: it needs the person.
+	Asks *session.PersonAsk `json:"asks,omitempty" doc:"open asks-you state {kind: decision|pick|approval|fix, question, since, item, source}; absent when the session asks the person nothing"`
 }
 
 func sessionList(ctx context.Context, in SessionListIn) (SessionListOut, error) {
@@ -166,8 +174,16 @@ func staticSessionRow(inst *session.Instance, instances []*session.Instance, pro
 		TranscriptPath:    transcripts[inst],
 		ResolvedCodexHome: inst.ResolvedCodexHome(),
 		IntendedSwitch:    inst.ActiveIntendedSwitchJSON(time.Now()),
+		IsConductor:       inst.IsConductor,
 		ConductorName:     inst.ListedConductorName(),
+		Asks:              listedAsk(inst.ID),
 	}
+}
+
+// listedAsk is the session's open ask, nil when none.
+func listedAsk(id string) *session.PersonAsk {
+	a, _ := session.LoadAsk(id)
+	return a
 }
 
 // liveSessionRows refreshes each session's status and fills every field.

@@ -197,6 +197,12 @@ func handleSessionShow(profile string, args []string) {
 	if rec := inst.ActiveIntendedSwitchJSON(time.Now()); rec != nil {
 		jsonData["intended_switch"] = rec
 	}
+	addConductorJSON(jsonData, inst)
+	// The open "asks you" state (session ask); omitted when none, as in
+	// list --json.
+	if ask, open := session.LoadAsk(inst.ID); open {
+		jsonData["asks"] = ask
+	}
 
 	// macapp-core-needs §3: the live native transcript and every native id
 	// seen for this session (Codex re-creates its rollout after the trust
@@ -1313,4 +1319,17 @@ func handleSessionSetTitleLock(profile string, args []string) {
 // TestIsValidSessionColor table in session_color_test.go keep working.
 func isValidSessionColor(v string) bool {
 	return session.IsValidSessionColor(v)
+}
+
+// addConductorJSON adds is_conductor and conductor_name for a conductor
+// session, as list --json carries them. Conductors are identified by these,
+// never by group or title. Omitted for other sessions.
+func addConductorJSON(jsonData map[string]interface{}, inst *session.Instance) {
+	if inst == nil || !inst.IsConductor {
+		return
+	}
+	jsonData["is_conductor"] = true
+	if name := inst.ListedConductorName(); name != "" {
+		jsonData["conductor_name"] = name
+	}
 }

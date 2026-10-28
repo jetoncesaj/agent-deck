@@ -463,6 +463,12 @@ func handleHookHandlerReceivedAt(receivedAt time.Time) {
 		return
 	}
 
+	// "Asks you": the person's message reaching the session answers its open
+	// ask (session.PromptIsFromPerson tells it from agent-deck's relays).
+	if normalizeHookEventKey(payload.HookEventName) == "userpromptsubmit" {
+		session.ClearAskOnPrompt(session.GetEffectiveProfile(""), instanceID, rawString(payload.Prompt))
+	}
+
 	// #572: Sync agent-deck title from Claude Code's --name / /rename value.
 	// Event-driven so user-facing rename lands within one hook tick; silent
 	// no-op when no name is set (sessions started without --name keep the

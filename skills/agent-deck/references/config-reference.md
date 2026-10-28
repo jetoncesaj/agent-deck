@@ -36,6 +36,7 @@ All options for `$XDG_CONFIG_HOME/agent-deck/config.toml` (default `~/.config/ag
 - [[notifications] Section](#notifications-section)
 - [[pane] Section (side panes)](#pane-section-side-panes)
 - [[inbox] Section](#inbox-section)
+- [[parent_wakes] Section](#parent_wakes-section)
 - [[comms] Section](#comms-section)
 - [[send] Section](#send-section)
 - [[costs.budgets] and [costs.run_budget]](#costsbudgets-and-costsrun_budget)
@@ -1220,6 +1221,34 @@ wake_on = ["urgent", "info"]     # restores a wake per recorded turn for this co
 | `journal_keep` | int | `256` | Lines kept per child in the turn journal (`agent-deck inbox stats` reads the counters, the journal is the per-turn history). |
 
 Measure the effect with `agent-deck inbox stats self` (or `--all`): records by tier, turns suppressed as noise or duplicates, wakeups fired and withheld, bytes injected.
+
+## [parent_wakes] Section
+
+Which of a child's events may wake or message its parent. `"all"` (the default) is the behaviour described under `[inbox]`. With `"escalation"` the parent link means only "who I escalate to" and "who may give me orders": a parent is woken or messaged only when the child
+
+- asks it: a `NEED:` / `QUESTION:` / `ASK:` line, or a trailing question in a turn the parent, a background task or the system started. A question in a turn a person typed is the person's to answer and stays with the child, unless it carries an explicit `NEED:` line. `question_wakes = false` does not apply here;
+- prints its final `===AGENTDECK_DONE===` line, `ok` or `fail`;
+- stays in error for `error_grace` (a failed restart or a process that died at its prompt included), as one `escalation` record carrying the error text;
+- shows no progress (status, transcript or hook activity) for `escalate_after` while nobody owes it an answer: its last turn asked no question and reported no completion, and no child of its own is running. One record per stall.
+
+Routine turns, status flips and progress text never reach the parent's inbox, so no wake, Stop-hook drain, prompt drain, `inbox drain` or info digest carries them, and the turn-start fleet snapshot leaves the child out. They stay in the turn journal, on the events bus and in `session children` / `list --json`. A reply to a tagged send from a session other than the parent still reaches that sender; a parent that wants the answer to its own order uses `session send --wait`.
+
+```toml
+[parent_wakes]
+mode = "escalation"         # "all" (default) or "escalation"
+escalate_after = "30m"      # time-out for a child with no progress; "0" or "off" turns it off
+error_grace = "3m"          # how long an error may last before it is an escalation
+
+[profiles.personal.parent_wakes]   # per-profile override, same keys
+mode = "escalation"
+
+[groups."team-a".parent_wakes]     # per-group override; the nearest group that sets a key wins, key by key
+mode = "all"
+```
+
+Each key resolves on its own for the child: its group, then each parent group, then `[profiles.<profile>.parent_wakes]`, then `[parent_wakes]`, then the default. The policy belongs to the child; the parent's group plays no part. `agent-deck inbox stats` counts the held routine records (`routine_held`) and the daemon's error and stall records (`escalations`).
+
+Harnesses whose turns carry no text on the inbox path (Codex, Gemini, pi, terminal tools) have no question signal there: in escalation mode they reach the parent with a completion, an error or a stall only. The Comms Ledger (`[comms] consumers`) is not filtered by this setting yet.
 
 ## [comms] Section
 

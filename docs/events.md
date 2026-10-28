@@ -39,6 +39,8 @@ trailing spaces).
 | `internal/session/transition_notifier.go` | `NotifyTransition` | `session.transition` |
 | `internal/session/transition_daemon_turns.go` | a top-level conductor's own turn, dropped (`self_conductor`) before the notifier; one frame per turn or observed flip | `session.transition` |
 | `internal/session/transition_notifier.go` | `NotifyFinished` | `session.finished` |
+| `internal/session/parent_wakes.go` | `NotifyEscalation`: the notify daemon raised an error that outlived `error_grace` or a stall past `escalate_after` for a child with `[parent_wakes] mode = "escalation"` | `session.escalation` |
+| `internal/session/asks.go` (from `session ask`, the `===AGENTDECK_ASKS===` marker line the notify daemon reads from a finished turn, and the prompt hook) | a session opened or replaced its "asks you" state, or it was cleared (`--clear`, the clear marker, or the person's own message) | `session.asks.set`, `session.asks.cleared` |
 | `internal/tmux/pipemanager.go` | tmux `%output`, only while a follower demands it (see below) | `tmux.output` |
 | `internal/watcher/engine.go` | `writerLoop` (new persisted event) | `watcher.event` |
 | `internal/watcher/engine.go` | `healthLoop` (health snapshot) | `watcher.health` |
@@ -52,6 +54,8 @@ Frame data for the session kinds (`session_id` is the agent-deck session id):
 | `session.status` | `{from, to, tool, tmux_session, substate, changed_at}` (`changed_at` RFC 3339, the frame `ts` is the same instant in ms) |
 | `session.turn` | `{phase: "started"}` or `{phase: "ended", to, duration_ms}` (duration measured by the publishing process; omitted when it did not see the start) |
 | `session.transcript` | `{path, bytes_appended, size}` |
+| `session.asks.set` | `{kind, question, since, item, source}` (`kind` is `decision`, `pick`, `approval` or `fix`; `source` is `cli` or `marker`; `item` may be empty) |
+| `session.asks.cleared` | `{kind, by}` (`by` is `person`, `cli` or `marker`) |
 | `queue.released` | `{id, state, outcome, reason}` (`outcome` as `session queue release --json` reports it) |
 | `queue.cancelled` | `{id, state: "cancelled"}` |
 | `session.trigger` | a fire: `{trigger_id, source, kind, outcome, health}` (`session_id` is the receiving session, `""` for a dead target); a mute change: `{trigger_id, mute: "muted"\|"unmuted"}`; a scan: `{scan: "<units found>"}`. Clients refetch `triggers --json` on any of them. |

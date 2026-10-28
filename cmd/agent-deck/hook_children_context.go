@@ -150,7 +150,7 @@ func renderChildrenContextSummary(instanceID string) string {
 	}
 	defer func() { _ = storage.Close() }()
 
-	kids := childrenOf(instanceID, instances)
+	kids := snapshotChildren(childrenOf(instanceID, instances), storage.Profile())
 	if len(kids) == 0 {
 		return ""
 	}
@@ -159,6 +159,20 @@ func renderChildrenContextSummary(instanceID string) string {
 	// every prompt (review round 4 P2). The hook-lag sample is taken by the
 	// polling surfaces (`session children --json` / `--follow`).
 	return withNotifyDaemonNote(formatChildrenContext(buildChildRows(kids, cachedChildStatus)), session.ReadWriterStatus())
+}
+
+// snapshotChildren drops the children whose [parent_wakes] mode is
+// "escalation": their status is not the parent's news, and what is (a
+// question, a completion, an error or a stall) reaches the parent's inbox.
+// `session children` still lists them.
+func snapshotChildren(kids []*session.Instance, profile string) []*session.Instance {
+	var out []*session.Instance
+	for _, kid := range kids {
+		if !session.ResolveParentWakePolicy(kid, profile).EscalationOnly() {
+			out = append(out, kid)
+		}
+	}
+	return out
 }
 
 // withNotifyDaemonNote appends the #2834 warning to the fleet header line when

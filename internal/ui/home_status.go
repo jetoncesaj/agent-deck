@@ -252,6 +252,9 @@ type sessionRenderState struct {
 	// means "counted": callers that build a fake snapshot without touching
 	// this field (many tests do) count everything.
 	archived bool
+	// askKind is the kind of the session's open "asks you" (session ask:
+	// decision, pick, approval, fix); empty when it asks the person nothing.
+	askKind string
 }
 
 // shouldPersistAutoNameDesc decides whether the background status loop should
@@ -395,6 +398,7 @@ func (h *Home) refreshSessionRenderSnapshot(instances []*session.Instance) {
 	}
 
 	snap := make(map[string]sessionRenderState, len(instances))
+	asks := session.OpenAsks() // one directory read for the whole list
 	for _, inst := range instances {
 		if inst == nil {
 			continue
@@ -413,6 +417,9 @@ func (h *Home) refreshSessionRenderSnapshot(instances []*session.Instance) {
 			title:        inst.GetTitleThreadSafe(),
 			autoName:     inst.GetAutoName(),
 			autoNameDesc: inst.GetAutoNameDescription(),
+		}
+		if a := asks[inst.ID]; a != nil {
+			state.askKind = a.Kind
 		}
 		// Look up pane title from the already-refreshed tmux cache.
 		// Only RefreshPaneInfoCache (called from backgroundStatusUpdate) keeps

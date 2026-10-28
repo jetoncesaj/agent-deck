@@ -174,8 +174,14 @@ type groupRenderStats struct {
 	sessionCount int
 	running      int
 	waiting      int
-	tinted       int
-	tint         string
+	// asks and errored count the sessions that ask the person something
+	// (session ask) and those in error; a collapsed group row shows them as
+	// badges ("2 ask you · 1 error") so a folded group still says it needs
+	// the person.
+	asks    int
+	errored int
+	tinted  int
+	tint    string
 }
 
 func (h *Home) buildGroupRenderStats(snapshot map[string]sessionRenderState) map[string]groupRenderStats {
@@ -207,6 +213,8 @@ func (h *Home) buildGroupRenderStats(snapshot map[string]sessionRenderState) map
 		directSessions := 0
 		directRunning := 0
 		directWaiting := 0
+		directAsks := 0
+		directErrors := 0
 		directTinted := 0
 		directTint := ""
 		for _, sess := range g.Sessions {
@@ -232,6 +240,15 @@ func (h *Home) buildGroupRenderStats(snapshot map[string]sessionRenderState) map
 				directRunning++
 			case session.StatusWaiting:
 				directWaiting++
+			case session.StatusError:
+				// An archived session keeps the status it was archived
+				// with; its stale error is not one to act on.
+				if !viewArchived {
+					directErrors++
+				}
+			}
+			if ok && state.askKind != "" && !viewArchived {
+				directAsks++
 			}
 		}
 
@@ -243,6 +260,8 @@ func (h *Home) buildGroupRenderStats(snapshot map[string]sessionRenderState) map
 			entry.sessionCount += directSessions
 			entry.running += directRunning
 			entry.waiting += directWaiting
+			entry.asks += directAsks
+			entry.errored += directErrors
 			entry.tinted += directTinted
 			// Smallest colour string wins: the walk runs over a map, so a
 			// fixed choice keeps the paint stable when colours differ.
@@ -417,8 +436,36 @@ func (h *Home) renderGroupItem(
 		countStr,
 		statusStr,
 	)
+	// A collapsed group hides the rows that need the person; its badges say
+	// how many (sessions and subgroups alike). Dropped when they do not fit.
+	if !group.Expanded {
+		if badges := groupAttentionBadges(stats, selected); badges != "" &&
+			(listWidth <= 0 || cellWidth(row)+cellWidth(badges) <= listWidth) {
+			row += badges
+		}
+	}
 	b.WriteString(row)
 	b.WriteString("\n")
+}
+
+// groupAttentionBadges renders a collapsed group's "N ask you · N error"
+// badges; empty when nothing in the group needs the person.
+func groupAttentionBadges(stats groupRenderStats, selected bool) string {
+	var parts []string
+	if stats.asks > 0 {
+		parts = append(parts, fmt.Sprintf("%d ask you", stats.asks))
+	}
+	if stats.errored > 0 {
+		parts = append(parts, fmt.Sprintf("%d error", stats.errored))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	style := lipgloss.NewStyle().Foreground(ColorYellow)
+	if selected {
+		style = GroupCountSelStyle
+	}
+	return " " + style.Render(strings.Join(parts, " · "))
 }
 
 // Tree drawing characters for visual hierarchy

@@ -40,6 +40,11 @@ type InboxStats struct {
 	// committed, never woken.
 	DoneRepeats int64 `json:"done_repeats"`
 	TextBytes   int64 `json:"text_bytes"` // child text carried on records
+	// RoutineHeld counts routine records of children with [parent_wakes]
+	// mode = "escalation" that were kept out of this parent's inbox;
+	// Escalations counts the daemon's own error and stall records.
+	RoutineHeld int64 `json:"routine_held,omitempty"`
+	Escalations int64 `json:"escalations,omitempty"`
 
 	// Wake side.
 	WakeupsUrgent     int64 `json:"wakeups_urgent"`

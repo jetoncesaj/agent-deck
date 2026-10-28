@@ -322,11 +322,11 @@ func textAsksParent(text string) bool {
 	var tail []string
 	for _, raw := range strings.Split(text, "\n") {
 		line := strings.TrimSpace(raw)
-		if line == "" {
+		if line == "" || lineIsAsksMarker(line) {
+			// An "asks you" line asks the person, not the parent (asks.go).
 			continue
 		}
-		marker := strings.ToUpper(strings.TrimLeft(line, "-*>#•· \t_`"))
-		if strings.HasPrefix(marker, "NEED:") || strings.HasPrefix(marker, "QUESTION:") || strings.HasPrefix(marker, "ASK:") {
+		if lineIsNeedMarker(line) {
 			return true
 		}
 		tail = append(tail, line)
@@ -336,6 +336,23 @@ func textAsksParent(text string) bool {
 	}
 	for _, line := range tail {
 		if strings.HasSuffix(strings.TrimRight(line, "*_`)]\"' "), "?") {
+			return true
+		}
+	}
+	return false
+}
+
+// lineIsNeedMarker reports a NEED:/QUESTION:/ASK: line (markdown emphasis
+// and bullet prefixes ignored).
+func lineIsNeedMarker(line string) bool {
+	marker := strings.ToUpper(strings.TrimLeft(strings.TrimSpace(line), "-*>#•· \t_`"))
+	return strings.HasPrefix(marker, "NEED:") || strings.HasPrefix(marker, "QUESTION:") || strings.HasPrefix(marker, "ASK:")
+}
+
+// textHasNeedMarker reports whether any line of text is a NEED marker.
+func textHasNeedMarker(text string) bool {
+	for _, raw := range strings.Split(text, "\n") {
+		if lineIsNeedMarker(raw) {
 			return true
 		}
 	}

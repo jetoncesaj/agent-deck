@@ -567,7 +567,17 @@ func (p *pushService) syncOnce(ctx context.Context) {
 	for _, tr := range transitions {
 		p.notifySubscribers(ctx, tr)
 	}
+	// "Asks you": one notification per new ask, claimed durably so a
+	// restart, a second poll or another process never sends it twice.
+	for id, sess := range sessions {
+		if sess.Asks != nil && session.MarkAskNotified(id, sess.Asks, "push") {
+			p.notifySubscribers(ctx, pushTransition{Profile: snapshot.Profile, Session: sess, Status: pushStatusAsks})
+		}
+	}
 }
+
+// pushStatusAsks is the pushTransition status of a new "asks you".
+const pushStatusAsks = "asks"
 
 func (p *pushService) notifySubscribers(ctx context.Context, tr pushTransition) {
 	if p == nil || p.store == nil || p.sender == nil || tr.Session == nil {
@@ -598,7 +608,7 @@ func (p *pushService) notifySubscribers(ctx context.Context, tr pushTransition) 
 		Profile:    tr.Profile,
 		Path:       p.routePath("/s/" + url.PathEscape(tr.Session.ID)),
 		Timestamp:  time.Now().UTC().Format(time.RFC3339),
-		RequireInt: tr.Status == "error",
+		RequireInt: tr.Status == "error" || tr.Status == pushStatusAsks,
 	}
 
 	payload, err := json.Marshal(msg)
@@ -713,6 +723,9 @@ func pushTitleForStatus(tr pushTransition) string {
 	if tr.Status == "error" {
 		return fmt.Sprintf("Agent Deck: %s (error)", sessionName)
 	}
+	if tr.Status == pushStatusAsks {
+		return fmt.Sprintf("Agent Deck: %s asks you", sessionName)
+	}
 	if tr.Status == "idle" {
 		return fmt.Sprintf("Agent Deck: %s (idle)", sessionName)
 	}
@@ -726,6 +739,10 @@ func pushBodyForStatus(tr pushTransition) string {
 	}
 	if tr.Status == "" {
 		return fmt.Sprintf("%s changed status.", sessionName)
+	}
+	if tr.Status == pushStatusAsks && tr.Session.Asks != nil {
+		_, body := session.AskNotificationText(sessionName, tr.Session.Asks)
+		return body
 	}
 	return fmt.Sprintf("%s changed to %s.", sessionName, tr.Status)
 }

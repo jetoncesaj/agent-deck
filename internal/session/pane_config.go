@@ -277,17 +277,19 @@ func PaneStatus(d *InstanceData) string {
 }
 
 // PaneFields returns the fields whose change sends a refresh: status,
-// title, item and pr. Nil when the session is not in all.
+// title, item, pr and asks. Nil when the session is not in all.
 func PaneFields(id string, all []*InstanceData) map[string]string {
 	d := findInstanceData(id, all)
 	if d == nil {
 		return nil
 	}
+	ask, _ := LoadAsk(d.ID)
 	return map[string]string{
 		"status": PaneStatus(d),
 		"title":  d.Title,
 		"item":   paneItemRef(d),
 		"pr":     panePRNumber(d),
+		"asks":   ask.PaneValue(), // "<kind>: <question>", "" when none
 	}
 }
 

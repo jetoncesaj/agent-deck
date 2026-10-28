@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/asheshgoplani/agent-deck/internal/session"
 )
 
 type fakePushStore struct {
@@ -564,5 +566,47 @@ func TestPushServiceSkipsWhenFocusUnknown(t *testing.T) {
 
 	if len(sender.payloads) != 0 {
 		t.Fatalf("expected no payloads when focus state is unknown, got %d", len(sender.payloads))
+	}
+}
+
+// "Asks you": a session's new ask raises one push, never a second one for
+// the same ask however many polls see it, and needs interaction.
+func TestPushServiceNotifiesOncePerAsk(t *testing.T) {
+	ask := &session.PersonAsk{Kind: "pick", Question: "Ship A or B?", Since: time.Now().UTC()}
+	snap := &MenuSnapshot{
+		Profile: "work",
+		Items: []MenuItem{{
+			Type:    MenuItemTypeSession,
+			Session: &MenuSession{ID: "sess-ask", Title: "Build Bot", Status: "waiting", Asks: ask},
+		}},
+	}
+	store := newFakePushStore()
+	focused := false
+	_ = store.Upsert(context.Background(), pushSubscription{
+		Endpoint:      "https://push.example/sub-ask",
+		ClientFocused: &focused,
+		Keys:          pushSubscriptionKeys{P256DH: "k1", Auth: "k2"},
+	})
+	sender := &fakePushSender{}
+	push := &pushService{
+		enabled:      true,
+		menuData:     &rotatingPushMenuData{snapshots: []*MenuSnapshot{snap}},
+		store:        store,
+		sender:       sender,
+		lastStatus:   make(map[string]string),
+		pollInterval: defaultPushPollInterval,
+	}
+	for i := 0; i < 4; i++ {
+		push.syncOnce(context.Background())
+	}
+	if len(sender.payloads) != 1 {
+		t.Fatalf("expected exactly 1 asks push, got %d", len(sender.payloads))
+	}
+	var msg pushMessage
+	if err := json.Unmarshal(sender.payloads[0], &msg); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if msg.Status != "asks" || !msg.RequireInt || msg.Title != "Agent Deck: Build Bot asks you" || msg.Body != "asks you (pick): Ship A or B?" {
+		t.Fatalf("asks push = %+v", msg)
 	}
 }

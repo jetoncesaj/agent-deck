@@ -64,6 +64,10 @@
           "type": "string",
           "format": "date-time"
         },
+        "asks": {
+          "$ref": "#/$defs/session.PersonAsk",
+          "description": "open asks-you state {kind: decision|pick|approval|fix, question, since, item, source}; absent when the session asks the person nothing"
+        },
         "background_work": {
           "$ref": "#/$defs/tmux.BackgroundWork",
           "description": "live; in-flight background work (workflow, agent, bash, monitor) behind substate background-work"
@@ -120,6 +124,10 @@
         "intended_switch": {
           "$ref": "#/$defs/session.IntendedSwitchJSON",
           "description": "intended account/model switch: the switch is intended while account and model equal it and now \u003c expires_at; absent when none or expired"
+        },
+        "is_conductor": {
+          "description": "true for a conductor session (identify conductors by this and conductor_name, never by group or title); absent for other sessions",
+          "type": "boolean"
         },
         "item": {
           "description": "tracker item ref set by session set \u003cid\u003e item; empty when none",
@@ -256,6 +264,33 @@
         "expires_at",
         "model",
         "reason"
+      ],
+      "additionalProperties": false
+    },
+    "session.PersonAsk": {
+      "type": "object",
+      "properties": {
+        "item": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "question": {
+          "type": "string"
+        },
+        "since": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "question",
+        "since"
       ],
       "additionalProperties": false
     },
