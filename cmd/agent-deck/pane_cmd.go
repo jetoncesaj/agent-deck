@@ -512,6 +512,9 @@ func runPaneHost(profile, sessionID string, slot int, agentPane, socket, command
 	}
 	notifier := newPaneNotifier(notifyMode, target.Title, target.Conductor, profile)
 	nav := newPaneNavigator(run, socket, target.TmuxSession, storage)
+	// One storage read serves the pane's own fields and its watched
+	// sessions on the same tick.
+	load := memoLoad(storage, 500*time.Millisecond)
 
 	// `pane refresh` requests arrive as files here plus SIGUSR1.
 	spool, err := panehost.SpoolDir(os.Getpid())
@@ -531,11 +534,18 @@ func runPaneHost(profile, sessionID string, slot int, agentPane, socket, command
 		Env:     env,
 		TTY:     os.Stdin,
 		Fields: func() map[string]string {
-			now, _, err := storage.LoadLite()
+			now, err := load()
 			if err != nil {
 				return nil
 			}
 			return session.PaneFields(sessionID, now)
+		},
+		Statuses: func(ids []string) map[string]string {
+			now, err := load()
+			if err != nil {
+				return nil
+			}
+			return session.PaneWatchStatuses(ids, now)
 		},
 		Probe:  func() panehost.Probe { return panehost.ProbeAgent(run, agentPane) },
 		Layout: func() { panehost.ApplyLayoutAs(run, target.TmuxSession, self) },
@@ -578,6 +588,28 @@ func runPaneHost(profile, sessionID string, slot int, agentPane, socket, command
 		time.Sleep(3 * time.Second)
 	}
 	return 0
+}
+
+// memoLoad returns a LoadLite that reuses a read younger than ttl.
+func memoLoad(storage *session.Storage, ttl time.Duration) func() ([]*session.InstanceData, error) {
+	var (
+		mu   sync.Mutex
+		at   time.Time
+		last []*session.InstanceData
+	)
+	return func() ([]*session.InstanceData, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if last != nil && time.Since(at) < ttl {
+			return last, nil
+		}
+		all, _, err := storage.LoadLite()
+		if err != nil {
+			return nil, err
+		}
+		last, at = all, time.Now()
+		return all, nil
+	}
 }
 
 // newPaneNavigator wires a provider's goto and open lines: sessions are

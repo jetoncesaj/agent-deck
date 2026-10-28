@@ -25,6 +25,11 @@
 //	refresh manual          someone asked for a refresh (agent-deck pane refresh)
 //	refresh FIELD VALUE     also from agent-deck pane refresh --field F
 //	                        --value V, for any other FIELD (e.g. "plane")
+//	refresh session ID VALUE  a watched session (see "watch") changed:
+//	                        VALUE is "STATUS" or "STATUS SUBSTATE" (e.g.
+//	                        "waiting", "error auth-401"), or "missing" when
+//	                        the session is not in the profile; sent at once
+//	                        for each newly watched session
 //	attach                  a client attached: resend anything the terminal
 //	                        does not keep, such as kitty graphics
 //
@@ -44,6 +49,13 @@
 //	open URL                open an http(s) URL for the client that last
 //	                        clicked (protocol 2): in the browser of a web
 //	                        terminal page, else with the machine's opener
+//	watch ID ID ...         the sessions this pane's view lists (protocol
+//	                        2); replaces the previous set, at most 200
+//	watch none              clear the watched set
+//
+// Watched sessions are read on the host's field tick (2 s), the same read
+// that drives its own "refresh status": no extra loop, and a burst of
+// changes between two ticks yields one line per session.
 //
 // Navigation lines name a session of the pane's profile and an http or https
 // URL; anything else is refused and logged. The host never runs what a

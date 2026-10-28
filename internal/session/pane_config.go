@@ -276,6 +276,38 @@ func PaneStatus(d *InstanceData) string {
 	return st
 }
 
+// PaneWatchStatuses returns the value of each watched session's "refresh
+// session ID VALUE" line: its PaneStatus, followed by a substate when one is
+// known without touching tmux (today: auth-401 for a session the fleet holds
+// on a credential failure). An id not in all is "missing".
+func PaneWatchStatuses(ids []string, all []*InstanceData) map[string]string {
+	byID := make(map[string]*InstanceData, len(all))
+	for _, d := range all {
+		if d != nil {
+			byID[d.ID] = d
+		}
+	}
+	out := make(map[string]string, len(ids))
+	for _, id := range ids {
+		d := byID[id]
+		if d == nil {
+			out[id] = "missing"
+			continue
+		}
+		v := PaneStatus(d)
+		if v == "" {
+			v = "unknown"
+		}
+		if !isHealthyForFreshnessGuard(d.Status) {
+			if rec, err := readAuthHoldRecord(d.ID); err == nil && rec != nil {
+				v += " " + string(SubstateAuth401)
+			}
+		}
+		out[id] = v
+	}
+	return out
+}
+
 // PaneFields returns the fields whose change sends a refresh: status,
 // title, item and pr. Nil when the session is not in all.
 func PaneFields(id string, all []*InstanceData) map[string]string {

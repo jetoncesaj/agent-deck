@@ -66,6 +66,14 @@ type Options struct {
 	// OnControl receives each line the provider writes to its control fd.
 	OnControl func(line string)
 
+	// Statuses returns the current value of each watched session ("STATUS"
+	// or "STATUS SUBSTATE"). A provider declares the sessions its view lists
+	// with the control line "watch ID ..." ("watch none" clears); each one
+	// that changes gets "refresh session ID VALUE" on the field tick, and
+	// each newly watched one gets its value at once. Nil: watch lines are
+	// ignored.
+	Statuses func(ids []string) map[string]string
+
 	// Refreshes drains the queued `pane refresh` requests on SIGUSR1, each
 	// the text after "refresh " ("manual" or "FIELD VALUE"). Nil, or an
 	// empty drain, sends "refresh manual".
@@ -212,7 +220,13 @@ func Run(ctx context.Context, o Options) (int, error) {
 		}
 	}
 
-	// Control lines from the provider.
+	// Control lines from the provider. A watch line is the host's own
+	// business: only the latest set matters, handed to the main loop.
+	var (
+		watchMu   sync.Mutex
+		watchNext []string
+	)
+	watchKick := make(chan struct{}, 1)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -220,8 +234,23 @@ func Run(ctx context.Context, o Options) (int, error) {
 		sc := bufio.NewScanner(ctlR)
 		sc.Buffer(make([]byte, 4096), 64*1024)
 		for sc.Scan() {
+			line := sc.Text()
+			if ids, ok, err := ParseWatch(line); ok {
+				if err != nil {
+					logf("refused control line: %v", err)
+					continue
+				}
+				watchMu.Lock()
+				watchNext = ids
+				watchMu.Unlock()
+				select {
+				case watchKick <- struct{}{}:
+				default:
+				}
+				continue
+			}
 			if o.OnControl != nil {
-				o.OnControl(sc.Text())
+				o.OnControl(line)
 			}
 		}
 	}()
@@ -276,6 +305,7 @@ func Run(ctx context.Context, o Options) (int, error) {
 	probeTick := time.NewTicker(o.ProbePeriod)
 	defer probeTick.Stop()
 
+	var watch watchState
 	var exitErr error
 	stopped := false
 loop:
@@ -326,7 +356,27 @@ loop:
 				stopped = true
 				break loop
 			}
+		case <-watchKick:
+			if o.Statuses == nil {
+				continue
+			}
+			watchMu.Lock()
+			ids := watchNext
+			watchMu.Unlock()
+			if added := watch.replace(ids); len(added) > 0 {
+				for _, l := range watch.changes(o.Statuses(added), added) {
+					send(l)
+				}
+			}
 		case <-fieldsTick.C:
+			// Watched sessions are read on the same tick as the pane's own
+			// fields: a burst of flips between two ticks is one line per
+			// session with the latest value, and a flip and back is none.
+			if o.Statuses != nil && len(watch.ids) > 0 {
+				for _, l := range watch.changes(o.Statuses(watch.ids), nil) {
+					send(l)
+				}
+			}
 			if o.Fields == nil {
 				continue
 			}
