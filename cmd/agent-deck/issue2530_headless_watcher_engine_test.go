@@ -52,8 +52,13 @@ func newIssue2530Env(t *testing.T) *issue2530Env {
 	}
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
+		// CLAUDE_* too: a CLAUDE_CONFIG_DIR inherited from the developer's
+		// own Claude session would point the binary (and the sessions it
+		// starts) at their real ~/.claude, its settings, hooks and status
+		// line, instead of the env's HOME.
 		if strings.HasPrefix(name, "TMUX") || strings.HasPrefix(name, "AGENTDECK_") ||
 			strings.HasPrefix(name, "AGENT_DECK_") || strings.HasPrefix(name, "XDG_") ||
+			strings.HasPrefix(name, "CLAUDE") ||
 			name == "HOME" || name == "SHELL" {
 			continue
 		}
