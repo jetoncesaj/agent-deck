@@ -269,3 +269,27 @@ func TestPaneWatchStatuses(t *testing.T) {
 		}
 	}
 }
+
+// Four layers: a worker's own helper is a worker too, its breadcrumb lists
+// every layer root first, and notifications still go to the topmost
+// conductor in the chain.
+func TestBuildPaneTarget_FourLayerChain(t *testing.T) {
+	all := append(paneFleet(), &InstanceData{ID: "h1", Title: "helper", ParentSessionID: "w1", GroupPath: "onaza/epics", ProjectPath: "/nonexistent/pane-test"})
+	tgt, ok := BuildPaneTarget("personal", "h1", all, "")
+	if !ok {
+		t.Fatal("helper not found")
+	}
+	if tgt.Role != PaneRoleWorker {
+		t.Fatalf("role %q, want worker", tgt.Role)
+	}
+	var chain []string
+	for _, p := range tgt.Parents {
+		chain = append(chain, p.ID)
+	}
+	if strings.Join(chain, ",") != "pc1,ec1,w1" {
+		t.Fatalf("breadcrumb %v, want pc1,ec1,w1 (root first, direct parent last)", chain)
+	}
+	if tgt.Conductor != "onaza" {
+		t.Fatalf("conductor %q, want the topmost conductor onaza", tgt.Conductor)
+	}
+}
