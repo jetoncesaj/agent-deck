@@ -119,8 +119,9 @@ function SessionItem({ s, sel, rowKey, onSelect, showCols, depth, groupDepth }) 
   // Nested UNDER ANOTHER SESSION, not merely inside a nested group — only that
   // needs the continuation guide. s.isSubSession alone would be wrong: the
   // server also flags orphans whose parent sits in a different group, and it
-  // emits those at top level (groups.go:749-773), where there is nothing above
-  // for a guide to connect to.
+  // emits those at top level (flattenGroupSessions in groups.go), where there
+  // is nothing above for a guide to connect to. A deeper row (a grandchild)
+  // is indented one --depth step per layer from its server Level.
   const indented = depth > groupDepth + 1
   const mcpCount = (s.mcps || []).length
   const skillCount = (s.skills || []).length

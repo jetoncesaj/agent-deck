@@ -64,3 +64,25 @@ func TestBuildMenuSnapshotGroupDefaultPath(t *testing.T) {
 		t.Errorf("unconfigured group serialized defaultPath key: %s", got)
 	}
 }
+
+// The web sidebar indents each row by its MenuItem.Level, so a three-level
+// tree must come out one level per layer, each row right after its parent.
+func TestBuildMenuSnapshotNestsEveryLayer(t *testing.T) {
+	mk := func(id, parent string) *session.Instance {
+		inst := session.NewInstanceWithGroupAndTool(id, "/srv/"+id, "proj", "claude")
+		inst.ID = id
+		inst.ParentSessionID = parent
+		return inst
+	}
+	instances := []*session.Instance{mk("top", ""), mk("epic", "top"), mk("worker", "epic"), mk("helper", "worker")}
+	snap := BuildMenuSnapshot("default", instances, []*session.GroupData{{Name: "proj", Path: "proj", Expanded: true}}, time.Now())
+	var got []string
+	for _, item := range snap.Items {
+		if item.Type == MenuItemTypeSession && item.Session != nil {
+			got = append(got, item.Session.ID+":"+string(rune('0'+item.Level)))
+		}
+	}
+	if strings.Join(got, ",") != "top:1,epic:2,worker:3,helper:4" {
+		t.Fatalf("session levels = %v, want top:1,epic:2,worker:3,helper:4", got)
+	}
+}

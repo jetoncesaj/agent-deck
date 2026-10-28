@@ -29,17 +29,16 @@ export function projectSession(item) {
   return {
     id,
     // Nesting depth straight off the wire (MenuItem.Level): groupLevel+1 for a
-    // top-level session, groupLevel+2 for one nested under a parent session.
+    // top-level session and one more per parent session it nests under
+    // (groupLevel+2 for a child, +3 for a grandchild, and so on).
     //
     // Taken from the server rather than re-derived from parentSessionId on
-    // purpose. GroupTree.Flatten nests exactly ONE level: it buckets
-    // sub-sessions by parent id, but only parents that are themselves
-    // top-level IN THIS GROUP get children attached. A grandchild — or a child
-    // whose parent lives in another group — falls through to the orphan branch
-    // and is emitted at groupLevel+1 with IsSubSession still true
-    // (internal/session/groups.go:749-773). Rebuilding the tree client-side
-    // the way RightRail does would recurse past that and disagree with the TUI.
-    // Level already encodes the answer, orphans included.
+    // purpose. GroupTree.Flatten nests a session under its parent only when
+    // the parent is IN THIS GROUP; a child whose parent lives in another
+    // group is emitted at groupLevel+1 with IsSubSession still true
+    // (flattenGroupSessions in internal/session/groups.go). Rebuilding the
+    // tree client-side the way RightRail does would nest across groups and
+    // disagree with the TUI. Level already encodes the answer, orphans included.
     level: item.level,
     // Exposed for consumers that care about the distinction itself. The
     // sidebar deliberately does NOT use it to decide indentation — the server
@@ -97,8 +96,8 @@ export function projectSession(item) {
 
 // A session row's nesting depth, on the same scale as a group row's.
 //
-// The server's Level is groupLevel+1 (top-level) or groupLevel+2 (nested), so
-// it lines up with group depth directly. Anything missing or nonsensical —
+// The server's Level is groupLevel+1 (top-level) plus one per parent session
+// the row nests under, so it lines up with group depth directly. Anything missing or nonsensical —
 // the archived feed projects sessions with no MenuItem around them — falls
 // back to "directly under its group", which is what every row did before
 // sub-sessions nested at all.
