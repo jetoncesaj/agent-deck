@@ -183,7 +183,7 @@ func TestPaneCLIAutoOpenStatusCloseAndStop(t *testing.T) {
 	pid := paneE2EPID(t, pidFile)
 	paneE2EWait(t, "hello line", func() bool {
 		b, _ := os.ReadFile(inLog)
-		return strings.HasPrefix(string(b), "hello 1\n")
+		return strings.HasPrefix(string(b), "hello 2\n")
 	})
 
 	env, _ := os.ReadFile(envFile)
@@ -233,6 +233,41 @@ func TestPaneCLIAutoOpenStatusCloseAndStop(t *testing.T) {
 	out, errOut, c := runAgentDeck(t, home, "-p", "_test", "pane", "open", added.ID)
 	if c != 0 || !strings.Contains(out, "already open") {
 		t.Fatalf("pane open again: %d %s %s", c, out, errOut)
+	}
+
+	// Refresh: plain stays "refresh manual"; --field sends the field; --all
+	// reaches every pane of the profile; the host's own fields are refused.
+	hasInLine := func(want string) bool {
+		b, _ := os.ReadFile(inLog)
+		for _, l := range strings.Split(string(b), "\n") {
+			if l == want {
+				return true
+			}
+		}
+		return false
+	}
+	if out, errOut, c = runAgentDeck(t, home, "-p", "_test", "pane", "refresh", added.ID); c != 0 {
+		t.Fatalf("pane refresh: %s %s", out, errOut)
+	}
+	paneE2EWait(t, "refresh manual", func() bool { return hasInLine("refresh manual") })
+	if out, errOut, c = runAgentDeck(t, home, "-p", "_test", "pane", "refresh", added.ID, "--field", "plane", "--value", "OPS-9  moved\nto review", "--json"); c != 0 || !strings.Contains(out, `"panes": 1`) {
+		t.Fatalf("pane refresh --field: %d %s %s", c, out, errOut)
+	}
+	paneE2EWait(t, "refresh plane", func() bool { return hasInLine("refresh plane OPS-9 moved to review") })
+	if out, errOut, c = runAgentDeck(t, home, "-p", "_test", "pane", "refresh", "--all", "--field", "plane", "--value", "ALL-1 done"); c != 0 || !strings.Contains(out, "refreshed 1 pane") {
+		t.Fatalf("pane refresh --all: %d %s %s", c, out, errOut)
+	}
+	paneE2EWait(t, "refresh plane from --all", func() bool { return hasInLine("refresh plane ALL-1 done") })
+	for _, bad := range [][]string{
+		{"pane", "refresh", added.ID, "--field", "status", "--value", "running"},
+		{"pane", "refresh", added.ID, "--field", "Bad Field"},
+		{"pane", "refresh", added.ID, "--value", "x"},
+		{"pane", "refresh"},
+		{"pane", "refresh", added.ID, "--all"},
+	} {
+		if _, _, c := runAgentDeck(t, home, append([]string{"-p", "_test"}, bad...)...); c == 0 {
+			t.Errorf("%v succeeded", bad)
+		}
 	}
 
 	if out, errOut, c = runAgentDeck(t, home, "-p", "_test", "pane", "close", added.ID); c != 0 {

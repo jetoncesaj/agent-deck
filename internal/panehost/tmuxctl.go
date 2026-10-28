@@ -24,6 +24,7 @@ const (
 	optZoomed    = "@agentdeck_pane_zoomed"  // window: 1 while the host zoomed the agent pane
 	optNarrow    = "@agentdeck_pane_narrow"  // window: narrow threshold in columns
 	optMinCols   = "@agentdeck_pane_mincols" // window: hide the column below this width
+	optClient    = "@agentdeck_pane_client"  // pane: the tmux client that last clicked in it
 
 	// focusHook is the window hook slot the host owns. It sends focus back
 	// to the agent pane when a host pane becomes active (a click selects
@@ -219,8 +220,14 @@ func Open(run Runner, spec OpenSpec) (HostPane, bool, error) {
 		args = []string{"split-window", "-d", "-h", "-t", st.AgentPane, "-l", fmt.Sprintf("%d%%", widthPercent(lay.Width)),
 			"-P", "-F", "#{pane_id}|#{pane_pid}", hostCmd}
 	} else {
-		args = []string{"split-window", "-d", "-v", "-t", st.Panes[0].PaneID, "-l", "50%",
-			"-P", "-F", "#{pane_id}|#{pane_pid}", hostCmd}
+		// Slots stack in order: slot 2 goes below slot 1, and a slot 1
+		// reopened while slot 2 is still open goes back above it (-b).
+		args = []string{"split-window", "-d", "-v"}
+		if slot < st.Panes[0].Slot {
+			args = append(args, "-b")
+		}
+		args = append(args, "-t", st.Panes[0].PaneID, "-l", "50%",
+			"-P", "-F", "#{pane_id}|#{pane_pid}", hostCmd)
 	}
 	out, err := run(args...)
 	if err != nil {
@@ -260,7 +267,15 @@ func Open(run Runner, spec OpenSpec) (HostPane, bool, error) {
 		_, _ = run("kill-pane", "-t", paneID)
 		return HostPane{}, false, err
 	}
+	if len(st.Panes) > 0 && !st.Zoomed {
+		// Joining an existing column: give it the configured width back,
+		// whatever it drifted to while one pane was left. A zoomed (narrow)
+		// window is left zoomed; the layout restores the width when it
+		// widens.
+		_, _ = run("resize-pane", "-t", paneID, "-x", fmt.Sprintf("%d%%", widthPercent(lay.Width)))
+	}
 	hp := HostPane{PaneID: paneID, Slot: slot, PID: pid, SessionID: spec.SessionID, Command: spec.Command, Graphics: spec.Graphics}
+	InstallClickBinding(run)
 	ApplyLayout(run, spec.TmuxSession)
 	return hp, true, nil
 }

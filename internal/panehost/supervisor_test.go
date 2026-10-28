@@ -122,7 +122,7 @@ func TestRunForwardsEventsToProviderStdin(t *testing.T) {
 	}()
 
 	waitFor(t, "hello and size", 3*time.Second, func() bool {
-		return hasLine(in, "hello 1") && hasLine(in, "resize 90 30")
+		return hasLine(in, "hello 2") && hasLine(in, "resize 90 30")
 	})
 
 	// What tmux writes to a pane that asked for SGR mouse reports.

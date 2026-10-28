@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -242,5 +243,29 @@ func TestPaneFields(t *testing.T) {
 	}
 	if PaneFields("missing", paneFleet()) != nil {
 		t.Fatal("missing session must give nil fields")
+	}
+}
+
+func TestPaneWatchStatuses(t *testing.T) {
+	all := append(paneFleet(), &InstanceData{ID: "held1", Title: "held", Status: StatusError})
+	if err := writeAuthHoldRecord(AuthHoldRecord{InstanceID: "held1", Reason: AuthHoldReasonLive, Evidence: "401", Timestamp: time.Now().Unix()}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { clearAuthHoldRecord("held1") })
+	// A healthy session with a stale hold sidecar reports no substate.
+	if err := writeAuthHoldRecord(AuthHoldRecord{InstanceID: "pc1", Reason: AuthHoldReasonLive, Evidence: "old", Timestamp: time.Now().Unix()}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { clearAuthHoldRecord("pc1") })
+
+	got := PaneWatchStatuses([]string{"w1", "solo", "held1", "pc1", "gone"}, all)
+	want := map[string]string{"w1": "waiting", "solo": "stopped", "held1": "error auth-401", "pc1": "running", "gone": "missing"}
+	if len(got) != len(want) {
+		t.Fatalf("PaneWatchStatuses = %v", got)
+	}
+	for id, v := range want {
+		if got[id] != v {
+			t.Errorf("%s = %q, want %q", id, got[id], v)
+		}
 	}
 }

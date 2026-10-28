@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -19,6 +21,7 @@ import (
 	"github.com/asheshgoplani/agent-deck/internal/desknotify"
 	"github.com/asheshgoplani/agent-deck/internal/logging"
 	"github.com/asheshgoplani/agent-deck/internal/panehost"
+	"github.com/asheshgoplani/agent-deck/internal/panenav"
 	"github.com/asheshgoplani/agent-deck/internal/session"
 )
 
@@ -35,12 +38,13 @@ func printPaneUsage() {
 	fmt.Println("  open <session>      Open the configured pane(s), or --command")
 	fmt.Println("  close <session>     Close the session's panes (--slot 1|2 for one)")
 	fmt.Println("  status <session>    Show the configured spec and the open panes")
-	fmt.Println("  refresh <session>   Send \"refresh manual\" to the session's panes")
+	fmt.Println("  refresh <session>   Send \"refresh manual\" (or --field F --value V) to the panes; --all for every session")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  agent-deck pane open worker-12")
 	fmt.Println("  agent-deck pane open worker-12 --command 'deck-kit pictures' --graphics")
 	fmt.Println("  agent-deck pane status worker-12 --json")
+	fmt.Println("  agent-deck pane refresh worker-12 --field plane --value \"OPS-9 state\"")
 }
 
 func handlePane(profile string, args []string) {
@@ -316,22 +320,115 @@ func handlePaneStatus(profile string, args []string) {
 func handlePaneRefresh(profile string, args []string) {
 	fs := flag.NewFlagSet("pane refresh", flag.ContinueOnError)
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
+	all := fs.Bool("all", false, "Every open pane of the profile")
+	field := fs.String("field", "", "Send \"refresh FIELD VALUE\" instead of \"refresh manual\"")
+	value := fs.String("value", "", "With --field: the value (one line)")
 	fs.Usage = func() {
-		fmt.Println("Usage: agent-deck pane refresh <id|title> [--json]")
+		fmt.Println("Usage: agent-deck pane refresh <id|title>|--all [--field F --value V] [--json]")
 		fmt.Println()
-		fmt.Println("Send \"refresh manual\" to every open pane of the session.")
+		fmt.Println("Send \"refresh manual\" to the session's open panes, or \"refresh F V\" with --field.")
+		fmt.Println("The host's own fields (status, title, item, pr, asks, session, manual) cannot be sent.")
 		fs.PrintDefaults()
 	}
 	if err := parseCLIFlags(fs, normalizeArgs(fs, args)); err != nil {
 		exitCLI(1)
 	}
 	out := NewCLIOutput(*jsonOutput, false)
-	ps := resolvePaneSession(profile, fs.Arg(0), out)
-	n := 0
-	if ps.tmux != "" && ps.inst.Exists() {
-		n = panehost.Signal(panehost.SocketRunner(ps.socket), ps.tmux, syscall.SIGUSR1)
+	f := strings.TrimSpace(*field)
+	if f == "" && *value != "" {
+		out.Error("--value needs --field", ErrCodeInvalidOperation)
+		exitCLI(1)
 	}
-	out.Success(fmt.Sprintf("refreshed %d pane(s) of %s", n, ps.inst.Title), map[string]interface{}{"success": true, "id": ps.inst.ID, "panes": n})
+	if f != "" {
+		if err := panehost.ValidRefreshField(f); err != nil {
+			out.Error(err.Error(), ErrCodeInvalidOperation)
+			exitCLI(1)
+		}
+	}
+	if *all == (fs.Arg(0) != "") {
+		out.Error("give one session or --all", ErrCodeInvalidOperation)
+		exitCLI(1)
+	}
+
+	var (
+		panes []panehost.HostPane
+		data  = map[string]interface{}{"success": true}
+		label string
+	)
+	if *all {
+		_, instances, _, err := loadSessionData(profile)
+		if err != nil {
+			out.Error(err.Error(), ErrCodeNotFound)
+			exitCLI(1)
+		}
+		panes = profileHostPanes(instances)
+		label = "profile " + session.GetEffectiveProfile(profile)
+		data["all"] = true
+	} else {
+		ps := resolvePaneSession(profile, fs.Arg(0), out)
+		if ps.tmux != "" && ps.inst.Exists() {
+			if st, err := panehost.Inspect(panehost.SocketRunner(ps.socket), ps.tmux); err == nil {
+				panes = st.Panes
+			}
+		}
+		label = ps.inst.Title
+		data["id"] = ps.inst.ID
+	}
+	n := 0
+	for _, p := range panes {
+		if refreshHostPane(p.PID, f, *value) {
+			n++
+		}
+	}
+	data["panes"] = n
+	if f != "" {
+		data["field"] = f
+		data["value"] = panehost.RefreshValue(*value)
+	}
+	out.Success(fmt.Sprintf("refreshed %d pane(s) of %s", n, label), data)
+}
+
+// profileHostPanes lists the open host panes of the profile's sessions,
+// one list-panes call per tmux server the profile uses.
+func profileHostPanes(instances []*session.Instance) []panehost.HostPane {
+	ids := map[string]bool{}
+	sockets := map[string]bool{}
+	for _, inst := range instances {
+		ids[inst.ID] = true
+		socket := inst.TmuxSocketName
+		if ts := inst.GetTmuxSession(); ts != nil {
+			socket = ts.SocketName
+		}
+		sockets[socket] = true
+	}
+	var panes []panehost.HostPane
+	for socket := range sockets {
+		hosts, err := panehost.ListHostPanes(panehost.SocketRunner(socket))
+		if err != nil {
+			continue
+		}
+		for _, h := range hosts {
+			if ids[h.SessionID] {
+				panes = append(panes, h)
+			}
+		}
+	}
+	return panes
+}
+
+// refreshHostPane queues one refresh for the host process pid (field ""
+// means manual) and signals it. A host without a spool (an older binary)
+// still gets the signal, which it reads as "refresh manual".
+func refreshHostPane(pid int, field, value string) bool {
+	if pid <= 0 {
+		return false
+	}
+	if dir, err := panehost.SpoolDir(pid); err == nil {
+		if err := panehost.Enqueue(dir, field, value); err != nil && field != "" {
+			paneLog.Warn("pane_refresh_field_unsupported", slog.Int("pid", pid), slog.String("error", err.Error()))
+		}
+	}
+	return syscall.Kill(pid, syscall.SIGUSR1) == nil
 }
 
 // paneProviderDrop are the identity variables a pane inherits from the
@@ -414,6 +511,22 @@ func runPaneHost(profile, sessionID string, slot int, agentPane, socket, command
 		notifyMode = cfg.Pane.NotifyMode()
 	}
 	notifier := newPaneNotifier(notifyMode, target.Title, target.Conductor, profile)
+	nav := newPaneNavigator(run, socket, target.TmuxSession, storage)
+	// One storage read serves the pane's own fields and its watched
+	// sessions on the same tick.
+	load := memoLoad(storage, 500*time.Millisecond)
+
+	// `pane refresh` requests arrive as files here plus SIGUSR1.
+	spool, err := panehost.SpoolDir(os.Getpid())
+	if err == nil {
+		if err := panehost.PrepareSpool(spool); err != nil {
+			spool = ""
+		} else {
+			defer os.RemoveAll(spool)
+		}
+	} else {
+		spool = ""
+	}
 
 	code, err := panehost.Run(context.Background(), panehost.Options{
 		Command: command,
@@ -421,15 +534,41 @@ func runPaneHost(profile, sessionID string, slot int, agentPane, socket, command
 		Env:     env,
 		TTY:     os.Stdin,
 		Fields: func() map[string]string {
-			now, _, err := storage.LoadLite()
+			now, err := load()
 			if err != nil {
 				return nil
 			}
 			return session.PaneFields(sessionID, now)
 		},
-		Probe:     func() panehost.Probe { return panehost.ProbeAgent(run, agentPane) },
-		Layout:    func() { panehost.ApplyLayoutAs(run, target.TmuxSession, self) },
-		OnControl: notifier.handle,
+		Statuses: func(ids []string) map[string]string {
+			now, err := load()
+			if err != nil {
+				return nil
+			}
+			return session.PaneWatchStatuses(ids, now)
+		},
+		Probe:  func() panehost.Probe { return panehost.ProbeAgent(run, agentPane) },
+		Layout: func() { panehost.ApplyLayoutAs(run, target.TmuxSession, self) },
+		OnControl: func(line string) {
+			if ok, err := nav.Handle(line); ok {
+				if err != nil {
+					paneLog.Warn("pane_nav_refused", slog.String("session", sessionID), slog.String("line", logging.SanitizeValue(line)), slog.String("error", logging.SanitizeValue(err.Error())))
+				}
+				return
+			}
+			notifier.handle(line)
+		},
+		Refreshes: func() []string {
+			if spool == "" {
+				return nil
+			}
+			return panehost.Drain(spool)
+		},
+		ClickClient: func() string {
+			c := panehost.ReadClickClient(run, self)
+			nav.Clicked(c)
+			return c
+		},
 		Logf: func(format string, a ...any) {
 			paneLog.Warn("pane_host", slog.String("session", sessionID), slog.String("msg", fmt.Sprintf(format, a...)))
 		},
@@ -449,6 +588,81 @@ func runPaneHost(profile, sessionID string, slot int, agentPane, socket, command
 		time.Sleep(3 * time.Second)
 	}
 	return 0
+}
+
+// memoLoad returns a LoadLite that reuses a read younger than ttl.
+func memoLoad(storage *session.Storage, ttl time.Duration) func() ([]*session.InstanceData, error) {
+	var (
+		mu   sync.Mutex
+		at   time.Time
+		last []*session.InstanceData
+	)
+	return func() ([]*session.InstanceData, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if last != nil && time.Since(at) < ttl {
+			return last, nil
+		}
+		all, _, err := storage.LoadLite()
+		if err != nil {
+			return nil, err
+		}
+		last, at = all, time.Now()
+		return all, nil
+	}
+}
+
+// newPaneNavigator wires a provider's goto and open lines: sessions are
+// looked up in the profile's storage, web terminal clients are handed to
+// their web server through internal/panenav, and URLs for a terminal client
+// go to the machine's opener.
+func newPaneNavigator(run panehost.Runner, socket, tmuxSession string, storage *session.Storage) *panehost.Navigator {
+	return &panehost.Navigator{
+		Run:         run,
+		TmuxSession: tmuxSession,
+		Socket:      socket,
+		Lookup: func(id string) (string, string, bool) {
+			all, _, err := storage.LoadLite()
+			if err != nil {
+				return "", "", false
+			}
+			for _, d := range all {
+				if d.ID == id {
+					return d.TmuxSession, d.TmuxSocketName, true
+				}
+			}
+			return "", "", false
+		},
+		Web: func(ev panenav.Event) (panenav.Reply, error) {
+			dir, err := panenav.Dir()
+			if err != nil {
+				return panenav.Reply{}, err
+			}
+			return panenav.Deliver(dir, ev, time.Second)
+		},
+		OpenLocal: openURLLocally,
+	}
+}
+
+// openURLLocally opens an already validated http(s) URL with the platform
+// opener, the URL as its only argument (never through a shell).
+func openURLLocally(url string) error {
+	name := "xdg-open"
+	if runtime.GOOS == "darwin" {
+		name = "open"
+	}
+	path, err := exec.LookPath(name)
+	if err != nil {
+		return fmt.Errorf("no URL opener on this machine: %w", err)
+	}
+	// #nosec G204 -- fixed opener; the URL was checked by panenav.ValidURL
+	// (http/https, no whitespace, so never an option).
+	cmd := exec.Command(path, url)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
 }
 
 // paneNotifier delivers a provider's "notify" control lines through Agent

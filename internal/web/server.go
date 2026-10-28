@@ -15,6 +15,7 @@ import (
 
 	"github.com/asheshgoplani/agent-deck/internal/costs"
 	"github.com/asheshgoplani/agent-deck/internal/logging"
+	"github.com/asheshgoplani/agent-deck/internal/panenav"
 	"github.com/asheshgoplani/agent-deck/internal/session"
 	"golang.org/x/time/rate"
 )
@@ -67,6 +68,10 @@ type Server struct {
 	hookWatcher *session.StatusFileWatcher
 	onListening func()
 
+	// paneNav routes a side pane's goto/open to the page whose tmux client
+	// clicked (internal/panenav); its socket is served while Start runs.
+	paneNav *panenav.Router
+
 	menuSubscribersMu sync.Mutex
 	menuSubscribers   map[chan struct{}]struct{}
 
@@ -118,6 +123,7 @@ func NewServer(cfg Config) *Server {
 		mutationLimiter:  mutationLimiter,
 		hookStatusLoader: defaultLoadHookStatuses,
 		annotationReader: &stateDBAnnotationReader{},
+		paneNav:          panenav.NewRouter(),
 	}
 	s.annotationLoader = s.annotationReader.load
 	if s.remoteFleet == nil {
@@ -247,6 +253,12 @@ func (s *Server) Start() error {
 	if s.push != nil {
 		s.push.Start(s.baseCtx)
 	}
+	if dir, err := panenav.Dir(); err != nil {
+		webLog.Warn("pane_nav_disabled", slog.String("error", err.Error()))
+	} else if err := s.paneNav.Listen(dir); err != nil {
+		webLog.Warn("pane_nav_disabled", slog.String("error", err.Error()))
+	}
+	defer s.paneNav.Close()
 	err := s.listenAndServe()
 	if s.hookWatcher != nil {
 		s.hookWatcher.Stop()
@@ -322,6 +334,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		s.hookWatcher.Stop()
 		s.hookWatcher = nil
 	}
+	s.paneNav.Close()
 
 	err := s.httpServer.Shutdown(ctx)
 	if err == nil {
