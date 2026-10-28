@@ -162,6 +162,9 @@ func NudgeHeadline(ev TransitionNotificationEvent) string {
 	if ev.Kind == transitionKindFinished && ev.DoneStatus != "" {
 		status = "done (" + ev.DoneStatus + ")"
 	}
+	if ev.Kind == transitionKindEscalation {
+		status = escalationStatusLabel(ev)
+	}
 	tier := ev.Tier
 	if tier == "" {
 		tier = TurnTierUrgent
@@ -208,6 +211,12 @@ func printableOneLine(s string) string {
 // DigestNudgeMessage is the wake for info that waited past the digest window.
 func DigestNudgeMessage(records, children int) string {
 	return fmt.Sprintf("[INBOX] digest · %d progress note(s) from %d child(ren) · details are in this turn's context", records, children)
+}
+
+// escalationStatusLabel is how a daemon escalation record (a child that
+// stayed in error, or stalled) names its status: "stalled (waiting)".
+func escalationStatusLabel(ev TransitionNotificationEvent) string {
+	return strings.TrimSpace(ev.Escalation) + " (" + ev.ToStatus + ")"
 }
 
 func firstLine(text string) string {

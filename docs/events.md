@@ -39,6 +39,7 @@ trailing spaces).
 | `internal/session/transition_notifier.go` | `NotifyTransition` | `session.transition` |
 | `internal/session/transition_daemon_turns.go` | a top-level conductor's own turn, dropped (`self_conductor`) before the notifier; one frame per turn or observed flip | `session.transition` |
 | `internal/session/transition_notifier.go` | `NotifyFinished` | `session.finished` |
+| `internal/session/parent_wakes.go` | `NotifyEscalation`: the notify daemon raised an error that outlived `error_grace` or a stall past `escalate_after` for a child with `[parent_wakes] mode = "escalation"` | `session.escalation` |
 | `internal/tmux/pipemanager.go` | tmux `%output`, only while a follower demands it (see below) | `tmux.output` |
 | `internal/watcher/engine.go` | `writerLoop` (new persisted event) | `watcher.event` |
 | `internal/watcher/engine.go` | `healthLoop` (health snapshot) | `watcher.health` |

@@ -182,7 +182,11 @@ func (d *TransitionDaemon) emitTurnWith(profile string, inst *Instance, byID map
 	}
 
 	cfg := ResolveInboxConfigForInstance(parentInstanceFor(inst, byID))
-	if !cfg.GetQuestionWakes() {
+	// [parent_wakes] mode = "escalation": a question is how the child
+	// escalates, and turning it into info would keep it from the parent
+	// altogether, so question_wakes = false does not apply.
+	wakes := ResolveParentWakePolicy(inst, profile)
+	if !cfg.GetQuestionWakes() && !wakes.EscalationOnly() {
 		facts.Question = false
 	}
 	prev := LastTurnJournalEntry(inst.ID)
@@ -251,6 +255,12 @@ func (d *TransitionDaemon) emitTurnWith(profile string, inst *Instance, byID map
 	event.TextHash = facts.TextHash
 	event.Text = text
 	event.Question = facts.Question
+	if facts.Question && !questionEscalates(facts, wakes) {
+		// The person stepped into the child and it asked them back: the
+		// answer comes from the person, so the parent is not woken. The
+		// journal keeps the question, which also keeps the stall timer off.
+		event.Question = false
+	}
 	event.FromID = facts.FromID
 	// The journal seq is assigned on append; stamp the record with the seq it
 	// WILL get so a reader can line the two up (appends are serialised per

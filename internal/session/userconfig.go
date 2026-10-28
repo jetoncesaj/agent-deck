@@ -135,6 +135,12 @@ type UserConfig struct {
 	// digest window. See InboxConfig.
 	Inbox InboxConfig `toml:"inbox,omitempty"`
 
+	// ParentWakes is the [parent_wakes] section: which of a child's events
+	// may wake or message its parent ("all", the default, or "escalation").
+	// [profiles.<name>.parent_wakes] and [groups."<path>".parent_wakes]
+	// override it. See ParentWakesSettings.
+	ParentWakes ParentWakesSettings `toml:"parent_wakes,omitempty"`
+
 	// Comms is the [comms] section: the one switch of the Comms Ledger
 	// (docs/comms.md). Off by default while the ledger is canaried.
 	Comms CommsSettings `toml:"comms,omitempty"`
@@ -1349,6 +1355,9 @@ type ProfileSettings struct {
 	Browser *BrowserSettings `toml:"browser,omitempty"`
 	// Sessions overrides [sessions] for this profile ([profiles.<name>.sessions]).
 	Sessions SessionsSettings `toml:"sessions,omitempty"`
+	// ParentWakes overrides [parent_wakes] for this profile's sessions
+	// ([profiles.<name>.parent_wakes]); a group override wins over it.
+	ParentWakes ParentWakesSettings `toml:"parent_wakes,omitempty"`
 }
 
 // SessionsSettings is the [sessions] section (and [profiles.<name>.sessions]).
@@ -1442,6 +1451,9 @@ type GroupSettings struct {
 	// Pane names the side-pane command for sessions in this group (and its
 	// subgroups). Empty: no pane. See PaneSpec.
 	Pane PaneSpec `toml:"pane,omitempty"`
+	// ParentWakes overrides [parent_wakes] for children in this group and
+	// its subgroups (nearest group that sets a key wins, key by key).
+	ParentWakes ParentWakesSettings `toml:"parent_wakes,omitempty"`
 }
 
 // GroupDefaultsSettings carries [group_defaults] — defaults stamped onto new

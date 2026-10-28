@@ -200,6 +200,11 @@ type TransitionDaemon struct {
 	// with talkback_interval_secs (transition_daemon_remote.go). Lazily
 	// created by the Run loop.
 	remoteTalkback *remoteTalkbackScheduler
+
+	// escalations is the per-(profile, child) memory of the [parent_wakes]
+	// escalation sweep (escalation_watch.go). Single-threaded, like the maps
+	// above.
+	escalations map[string]map[string]*escalationWatch
 }
 
 func NewTransitionDaemon() *TransitionDaemon {
@@ -732,6 +737,9 @@ func (d *TransitionDaemon) syncProfile(profile string) time.Duration {
 	d.emitHookTransitionCandidates(profile, byID, prev, statuses, hookCandidates)
 	d.emitDoneSignals(profile, byID, hookStatuses)
 	d.wakeForInfoDigests(profile, byID, statuses)
+	// [parent_wakes] mode = "escalation": an error that outlived its grace
+	// and a stalled child are raised here; no turn carries them.
+	d.sweepEscalations(profile, byID, statuses, hookStatuses, notifyEnabled, time.Now())
 
 	// Last, after this pass's own sends and wakes: idle sessions on an
 	// outdated Claude/Codex build restart onto the new one ([sessions]

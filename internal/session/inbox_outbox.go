@@ -608,32 +608,35 @@ func countNonblankInboxRecords(path string) (int, error) {
 //
 // sender is the session a tagged send's reply must also reach (see
 // replySenderFor), resolved independently of the parent.
-func (n *TransitionNotifier) resolveParentIDForInbox(event TransitionNotificationEvent) (parent, sender *Instance, transient bool, reason string) {
+//
+// child is the child's registry row (nil with a terminal reason when it is
+// gone), so the caller can resolve the child's [parent_wakes] policy.
+func (n *TransitionNotifier) resolveParentIDForInbox(event TransitionNotificationEvent) (parent, sender, child *Instance, transient bool, reason string) {
 	storage, err := NewStorageWithProfile(event.Profile)
 	if err != nil {
-		return nil, nil, true, ""
+		return nil, nil, nil, true, ""
 	}
 	defer storage.Close()
 	instances, _, err := storage.LoadWithGroups()
 	if err != nil {
-		return nil, nil, true, ""
+		return nil, nil, nil, true, ""
 	}
 	byID := make(map[string]*Instance, len(instances))
 	for _, inst := range instances {
 		byID[inst.ID] = inst
 	}
 
-	child := byID[event.ChildSessionID]
+	child = byID[event.ChildSessionID]
 	if child == nil {
 		// Child removed between commit/observe and resolve — terminal, but the
 		// operator should know a completion was dropped (audit B5).
-		return nil, nil, false, deadLetterReasonChildMissing
+		return nil, nil, nil, false, deadLetterReasonChildMissing
 	}
 	if child.NoTransitionNotify {
-		return nil, nil, false, deadLetterReasonNoNotify
+		return nil, nil, child, false, deadLetterReasonNoNotify
 	}
 	parent, reason = n.resolveInboxParent(event, child, byID)
-	return parent, replySenderFor(event, child, parent, byID), false, reason
+	return parent, replySenderFor(event, child, parent, byID), child, false, reason
 }
 
 // resolveInboxParent applies the conductor/orphan/missing-parent guards to a
@@ -699,7 +702,7 @@ func replySenderFor(event TransitionNotificationEvent, child, parent *Instance, 
 // retryable error (storage/fs) occurred. committed=false, transient=false means
 // terminally undeliverable — the caller dead-letters.
 func (n *TransitionNotifier) commitEventToInbox(event TransitionNotificationEvent) (committed bool, transient bool, reason string) {
-	parent, sender, t, reason := n.resolveParentIDForInbox(event)
+	parent, sender, child, t, reason := n.resolveParentIDForInbox(event)
 	if t {
 		return false, true, ""
 	}
@@ -715,6 +718,19 @@ func (n *TransitionNotifier) commitEventToInbox(event TransitionNotificationEven
 		return committed, transient, reason
 	}
 	parentID := parent.ID
+	// [parent_wakes] mode = "escalation": a routine record (a status flip,
+	// progress text, a not-yet-escalated error) never reaches the parent's
+	// inbox, so no wake, Stop-hook drain, prompt drain or digest can carry
+	// it. It stays in the turn journal and on the events bus. A tagged
+	// sender other than the parent still gets its answer.
+	if ResolveParentWakePolicy(child, event.Profile).EscalationOnly() && ParentEscalation(event) == "" {
+		n.noteHeldRoutine(event)
+		_ = BumpInboxStats(parentID, func(s *InboxStats) { s.RoutineHeld++ })
+		commsLog.Debug("parent_wake_held_routine",
+			slog.String("parent", parentID), slog.String("child", event.ChildSessionID), slog.String("to", event.ToStatus))
+		n.commitReplyToSender(sender, reply)
+		return true, false, deliveryReasonRoutineHeld
+	}
 	event.TargetSessionID = parentID
 	event.TargetKind = "parent"
 	event.DeliveryResult = transitionDeliveryCommitted

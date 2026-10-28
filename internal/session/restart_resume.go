@@ -560,6 +560,8 @@ func (d *TransitionDaemon) commitRestartRecord(inst *Instance, event TransitionN
 	event.restartJudged = true
 	committed, transient, reason := d.notifier.commitEventToInbox(event)
 	switch {
+	case committed && reason == deliveryReasonRoutineHeld:
+		event.DeliveryResult = transitionDeliveryHeld
 	case committed:
 		event.DeliveryResult = transitionDeliveryCommitted
 		_ = BumpInboxStats(statsParentFor(inst), func(s *InboxStats) {

@@ -223,6 +223,9 @@ func FormatInboxRecords(events []TransitionNotificationEvent, header string) str
 		if ev.Kind == transitionKindFinished && ev.DoneStatus != "" {
 			status = ev.DoneStatus
 		}
+		if ev.Kind == transitionKindEscalation {
+			status = escalationStatusLabel(ev)
+		}
 		title := ev.ChildTitle
 		if title == "" {
 			title = ev.ChildSessionID

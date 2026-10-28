@@ -22,6 +22,10 @@ const (
 	// per-parent outbox (issue #1225) — the pull-model replacement for the
 	// old push results. The parent drains it at its own turn boundary.
 	transitionDeliveryCommitted = "committed_inbox"
+	// transitionDeliveryHeld marks a routine record a child with [parent_wakes]
+	// mode = "escalation" did not send to its parent (parent_wakes.go). It is
+	// handled (journaled, deduped) but in no inbox.
+	transitionDeliveryHeld = "held_routine"
 
 	// defaultOutputHashDedupTTL caps the (child, to_status, output_hash)
 	// suppression window from issue #1142. A dormant child that re-emits
@@ -89,6 +93,12 @@ type TransitionNotificationEvent struct {
 	// finished event. Unused for transition events.
 	DoneStatus  string `json:"done_status,omitempty"`
 	DoneSummary string `json:"done_summary,omitempty"`
+
+	// Escalation names what the notify daemon raised on a Kind "escalation"
+	// record for a child with [parent_wakes] mode = "escalation":
+	// EscalationError or EscalationStalled. Empty on every other record; see
+	// ParentEscalation.
+	Escalation string `json:"escalation,omitempty"`
 
 	// TurnFingerprint identifies a child's completed turn for exactly-once
 	// consumer effects (issue #1225). Coarser than EventFingerprint (which
@@ -245,6 +255,12 @@ type TransitionNotifier struct {
 	// disables nudging (correctness unaffected — the record still drains on the
 	// next turn). Tests inject a spy wiring; production gets defaultWakeNudgeWiring.
 	wake *wakeNudgeWiring
+
+	// heldMu guards heldErrorText: per child, the text of the last error
+	// record [parent_wakes] mode = "escalation" held back, for the error
+	// escalation the daemon raises if the child stays in error.
+	heldMu        sync.Mutex
+	heldErrorText map[string]string
 }
 
 // deadLetterSink returns the notifier's bounded dead-letter sink, initialized
@@ -438,7 +454,7 @@ func (n *TransitionNotifier) NotifyTransition(event TransitionNotificationEvent)
 	committed, transient, reason := n.commitEventToInbox(event)
 	if committed {
 		n.markNotified(event)
-		event.DeliveryResult = transitionDeliveryCommitted
+		event.DeliveryResult = committedDeliveryResult(reason)
 		return event
 	}
 	if transient {
@@ -489,7 +505,7 @@ func (n *TransitionNotifier) NotifyFinished(event TransitionNotificationEvent) (
 	// Issue #1225: commit the finished event to the parent's durable outbox.
 	committed, transient, reason := n.commitEventToInbox(event)
 	if committed {
-		event.DeliveryResult = transitionDeliveryCommitted
+		event.DeliveryResult = committedDeliveryResult(reason)
 		return event
 	}
 	if transient {
@@ -500,6 +516,15 @@ func (n *TransitionNotifier) NotifyFinished(event TransitionNotificationEvent) (
 	event.DeliveryResult = transitionDeliveryDropped
 	event.DeadLetterReason = reason
 	return event
+}
+
+// committedDeliveryResult is the DeliveryResult of a record
+// commitEventToInbox handled: committed, or held as routine.
+func committedDeliveryResult(reason string) string {
+	if reason == deliveryReasonRoutineHeld {
+		return transitionDeliveryHeld
+	}
+	return transitionDeliveryCommitted
 }
 
 // publishTransitionEvent is the slice-4 (CORE-PLAN) tap onto the event bus.
