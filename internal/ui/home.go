@@ -8224,6 +8224,11 @@ func (h *Home) renderSessionItem(
 	// the stopped glyph for archived sessions whose snapshot still carries a
 	// stale live status.
 	statusIcon, statusStyle := rowStatusGlyph(instStatus, instSubstate, inst.IsArchived())
+	// A driver-set row state replaces the deck's glyph: one symbol per row.
+	stateGlyph := false
+	if icon, style, ok := rowStateGlyph(instState.rowState, inst.IsArchived()); ok {
+		statusIcon, statusStyle, stateGlyph = icon, style, true
+	}
 
 	status := statusStyle.Render(statusIcon)
 
@@ -8446,12 +8451,43 @@ func (h *Home) renderSessionItem(
 		childFoldBadge = foldStyle.Render(fmt.Sprintf(" %s%d", foldChar, h.sessionChildCount(item)))
 	}
 
+	// Roll-up on a folded parent row: "!" in the attention colour when
+	// anything in the hidden subtree needs the person, then short counts in
+	// words ("1 needs you · 2 working"). The mark is reserved like the fold
+	// badge; the words drop first when the row runs out of room.
+	rollupMark, rollupWords := "", ""
+	if childFoldBadge != "" && h.parentChildrenCollapsed[inst.ID] {
+		needs, working := h.foldRollup(item, snapshot)
+		attnStyle := lipgloss.NewStyle().Foreground(ColorYellow).Bold(true)
+		wordStyle := DimStyle
+		if selected {
+			attnStyle = SessionStatusSelStyle
+			wordStyle = SessionStatusSelStyle
+		}
+		var parts []string
+		if needs > 0 {
+			rollupMark = attnStyle.Render(" !")
+			parts = append(parts, attnStyle.Render(fmt.Sprintf("%d needs you", needs)))
+		}
+		if working > 0 {
+			parts = append(parts, wordStyle.Render(fmt.Sprintf("%d working", working)))
+		}
+		if len(parts) > 0 {
+			rollupWords = " " + strings.Join(parts, wordStyle.Render(" · "))
+		}
+	}
+
 	// The session name stays first. A useful pane or saved task description is
 	// the optional dim suffix, including for auto-named quick sessions.
 	// Snapshot form only here: the per-row Instance.mu reads the inst-based
 	// form does can block behind a mid-sweep UpdateStatus writer for seconds,
 	// scaling with visible rows (#1753 black-screen).
 	displayTitle, paneSubtitle := sessionDisplayLabelsFromState(instState)
+	// Inside its group a row whose group shares one item prefix shows the
+	// item's number, not the ref the group already names (display only).
+	if instState.groupTitle != "" {
+		displayTitle = instState.groupTitle
+	}
 	// Pin marker (pin-sessions): a 📌 prefix flags any pinned row. Position in
 	// the list conveys top vs bottom; the emoji conveys "this is pinned".
 	// Prepended before the AutoName truncation budget so width accounting below
@@ -8462,6 +8498,10 @@ func (h *Home) renderSessionItem(
 	// Maestro (fleet supervisor): ⬢ glyph leads the title.
 	if isMaestro {
 		displayTitle = "⬢ " + displayTitle
+	} else if instState.conductorMark {
+		// Conductor (◆): from the conductor flag and parent links in the
+		// snapshot, never from the title.
+		displayTitle = "◆ " + displayTitle
 	}
 	// Include the stored slot in the existing badge/title cell budget. Normal
 	// titles need the same reservation as auto-names so the badge stays visible.
@@ -8470,7 +8510,8 @@ func (h *Home) renderSessionItem(
 		cellWidth(status) + 1 + cellWidth(tool) +
 		cellWidth(maestroBadge) + cellWidth(yoloBadge) + cellWidth(worktreeBadge) +
 		cellWidth(sandboxBadge) + cellWidth(multiRepoBadge) + cellWidth(sshBadge) +
-		cellWidth(agentBadge) + cellWidth(askBadge) + cellWidth(timestampBadge)
+		cellWidth(agentBadge) + cellWidth(askBadge) + cellWidth(timestampBadge) +
+		cellWidth(rollupMark)
 	// Keep a useful title before spending narrow-row space on a worktree badge.
 	if listWidth > 0 && listWidth < 40 && worktreeBadge != "" {
 		originalWidth := cellWidth(worktreeBadge)
@@ -8502,6 +8543,46 @@ func (h *Home) renderSessionItem(
 		titleFloor := min(available, minSessionTitleWidth)
 		badgeBudget = max(0, available-titleFloor)
 	}
+	// The driver state's word and role, a dim suffix after the title. It
+	// takes the badge room first and shrinks before it drops.
+	stateSuffix := ""
+	if st := instState.rowState; stateGlyph && st != nil {
+		var parts []string
+		for _, part := range []string{st.Word, st.Role} {
+			if part != "" {
+				parts = append(parts, part)
+			}
+		}
+		stateSuffix = strings.Join(parts, " · ")
+	}
+	stateSuffixWidth := 0
+	if stateSuffix != "" {
+		if badgeBudget >= 0 && cellWidth(stateSuffix)+1 > badgeBudget {
+			if badgeBudget >= 5 {
+				stateSuffix = cellTruncate(stateSuffix, badgeBudget-1, "…")
+			} else {
+				stateSuffix = ""
+			}
+		}
+		if stateSuffix != "" {
+			suffixStyle := DimStyle
+			if selected {
+				suffixStyle = SessionStatusSelStyle
+			}
+			stateSuffix = suffixStyle.Render(" " + stateSuffix)
+			stateSuffixWidth = cellWidth(stateSuffix)
+			if badgeBudget >= 0 {
+				badgeBudget -= stateSuffixWidth
+			}
+		}
+	}
+	rollupWidth := cellWidth(rollupWords)
+	if badgeBudget >= 0 {
+		if rollupWidth > badgeBudget {
+			rollupWords, rollupWidth = "", 0
+		}
+		badgeBudget -= rollupWidth
+	}
 	cachedViewers, cachedViewersKnown := inst.ViewersCached()
 	viewersBadgeText, viewersWidth := fitViewersBadge(cachedViewers, cachedViewersKnown, selected, badgeBudget)
 	// ⚡N: how many triggers wake this session (triggers_live.go). Read from
@@ -8517,6 +8598,11 @@ func (h *Home) renderSessionItem(
 		accountBudget = min(accountBudget, badgeBudget-viewersWidth-triggersWidth)
 	}
 	accountBadge, accountWidth := instState.accountDisplay.fit(accountBudget)
+	if instState.accountDefault {
+		// [display] hide_default_account_badge: the slot is where the
+		// session would run anyway; the preview still names it.
+		accountBadge, accountWidth = "", 0
+	}
 	if accountBadge != "" {
 		accountStyle := DimStyle
 		if selected {
@@ -8525,7 +8611,7 @@ func (h *Home) renderSessionItem(
 		accountBadge = accountStyle.Render(accountBadge)
 	}
 	if listWidth > 0 {
-		budget := max(0, listWidth-reserved-viewersWidth-triggersWidth-accountWidth-1)
+		budget := max(0, listWidth-reserved-stateSuffixWidth-rollupWidth-viewersWidth-triggersWidth-accountWidth-1)
 		if cellWidth(displayTitle) > budget {
 			displayTitle = cellTruncate(displayTitle, budget, "…")
 		}
@@ -8536,7 +8622,7 @@ func (h *Home) renderSessionItem(
 	// The leading gutter (leftGutterWidth) keeps sessions aligned with group
 	// rows, which reserve the same gutter for root hotkey numbers.
 	row := fmt.Sprintf(
-		"%s%s%s%s%s%s %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+		"%s%s%s%s%s%s %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
 		strings.Repeat(" ", leftGutterWidth),
 		baseIndent,
 		selectionPrefix,
@@ -8544,6 +8630,7 @@ func (h *Home) renderSessionItem(
 		windowChevron,
 		status,
 		title,
+		stateSuffix,
 		tool,
 		maestroBadge,
 		yoloBadge,
@@ -8558,6 +8645,8 @@ func (h *Home) renderSessionItem(
 		accountBadge,
 		timestampBadge,
 		childFoldBadge,
+		rollupMark,
+		rollupWords,
 	)
 
 	// Append pane title filling remaining row space (only for the selected item).

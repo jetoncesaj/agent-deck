@@ -997,7 +997,19 @@ func (h *Home) renderPreviewPane(width, height int) string {
 	b.WriteString(toolBadge)
 	b.WriteString(" ")
 	b.WriteString(groupBadge)
+	// The row may leave the account and the pane title off (default slot,
+	// hide_default_*_badge; a pane title that repeats the session title);
+	// the preview keeps both. Snapshot reads only, like the row.
+	previewState := h.getSessionRenderState(selected)
+	if account := previewState.accountDisplay.label; account != "" {
+		b.WriteString(" ")
+		b.WriteString(infoStyle.Render("account " + cellTruncate(account, max(0, width-4-cellWidth(selected.DisplayToolThreadSafe())-cellWidth(selected.GroupPath)-14), "…")))
+	}
 	b.WriteString("\n")
+	if pane := previewState.paneTitle; pane != "" {
+		b.WriteString(infoStyle.Render(cellTruncate("pane: "+pane, max(0, width-4), "…")))
+		b.WriteString("\n")
+	}
 
 	// Agent card. When the selected session belongs to an adopted agent, its
 	// role, triggers, connector health and recent ledger entries render here

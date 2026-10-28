@@ -3,6 +3,8 @@ package session
 import (
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -84,4 +86,51 @@ func DefaultAccountForNewSession(cfg *UserConfig, groupPath string, parent *Inst
 		return ""
 	}
 	return account
+}
+
+// AccountSlotIsDefault reports whether a session's stored account slot
+// changes nothing about where it runs, so the session list can leave the
+// account badge off ([display] hide_default_account_badge). That holds for
+// no slot (inherit), for the [claude].default_account a new session in the
+// group starts on (DefaultAccountForNewSession), and for a slot whose Claude
+// config_dir is the directory the session's conductor, group, profile or
+// global config resolves to without it. conductorName is the session's
+// resolved conductor name ("" for none). CLAUDE_CONFIG_DIR is not consulted:
+// the row speaks for config.toml, not for the shell the TUI started in.
+func AccountSlotIsDefault(cfg *UserConfig, account, tool, groupPath, conductorName string, parent *Instance) bool {
+	account = strings.TrimSpace(account)
+	if account == "" {
+		return true
+	}
+	if cfg == nil || !IsClaudeCompatible(tool) {
+		return false
+	}
+	if account == DefaultAccountForNewSession(cfg, groupPath, parent) {
+		return true
+	}
+	slotDir := cfg.GetProfileClaudeConfigDir(account)
+	if slotDir == "" {
+		return false
+	}
+	inherited := ""
+	if conductorName != "" {
+		inherited = cfg.GetConductorClaudeConfigDir(conductorName)
+	}
+	if inherited == "" {
+		inherited = cfg.GetGroupClaudeConfigDir(groupPath)
+	}
+	if inherited == "" {
+		inherited = cfg.GetProfileClaudeConfigDir(resolvedProcessProfile())
+	}
+	if inherited == "" && cfg.Claude.ConfigDir != "" {
+		inherited = ExpandPath(cfg.Claude.ConfigDir)
+	}
+	if inherited == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return false
+		}
+		inherited = filepath.Join(home, ".claude")
+	}
+	return filepath.Clean(slotDir) == filepath.Clean(inherited)
 }

@@ -3257,6 +3257,10 @@ func buildListJSON(profileName string, instances []*session.Instance, cachedStat
 
 		// Asks: see core.SessionRow (absent when none).
 		Asks *session.PersonAsk `json:"asks,omitempty"`
+
+		// State: the driver-set row state (session set <id> state); absent
+		// when unset.
+		State *session.RowState `json:"state,omitempty"`
 	}
 	sessions := make([]sessionJSON, len(instances))
 	transcripts := session.ListedTranscriptPaths(instances)
@@ -3289,6 +3293,7 @@ func buildListJSON(profileName string, instances []*session.Instance, cachedStat
 			Path:              inst.ProjectPath,
 			Group:             inst.GroupPath,
 			Item:              inst.ItemRef(),
+			State:             inst.RowState(),
 			Tool:              inst.Tool,
 			Account:           inst.Account,
 			Command:           inst.Command,
@@ -3378,6 +3383,9 @@ func handleListAllProfiles(jsonOutput, includeSuperseded bool) {
 			ClaudeSessionID   string    `json:"claude_session_id,omitempty"`
 			TranscriptPath    string    `json:"transcript_path,omitempty"`
 			ResolvedCodexHome string    `json:"resolved_codex_home,omitempty"`
+
+			// State: the driver-set row state, absent when unset.
+			State *session.RowState `json:"state,omitempty"`
 		}
 		// Non-nil so an empty result marshals as [] rather than null.
 		allSessions := []sessionJSON{}
@@ -3407,6 +3415,7 @@ func handleListAllProfiles(jsonOutput, includeSuperseded bool) {
 					Path:              inst.ProjectPath,
 					Group:             inst.GroupPath,
 					Item:              inst.ItemRef(),
+					State:             inst.RowState(),
 					Tool:              inst.Tool,
 					Account:           inst.Account,
 					Command:           inst.Command,

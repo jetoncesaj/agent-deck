@@ -427,7 +427,7 @@ agent-deck session primer my-project --json
 agent-deck session set <id|title> <field> <value>
 ```
 
-**Fields:** title, path, command, tool, wrapper, channels, plugins, extra-args, model, color, favorite, claude-session-id, gemini-session-id, tool-session-id, account, idle-timeout, context-level, prompt-suggestions, wait-timeout, order, intended-switch (run `session set --help` for each). `account` and `model` also take `--intended "<reason>"` [`--intended-for 48h`] to mark a switch as on purpose.
+**Fields:** title, path, command, tool, wrapper, channels, plugins, extra-args, model, color, favorite, claude-session-id, gemini-session-id, tool-session-id, account, idle-timeout, context-level, prompt-suggestions, wait-timeout, order, intended-switch, item, state (run `session set --help` for each). `account` and `model` also take `--intended "<reason>"` [`--intended-for 48h`] to mark a switch as on purpose.
 
 Setting `account` auto-migrates the Claude conversation into the target account's config dir (same migration as `session switch-account`, but without the automatic stop/restart).
 
@@ -443,6 +443,27 @@ agent-deck session set my-project context-level ""       # clear: inherit group/
 ```bash
 agent-deck session set my-worker prompt-suggestions on   # keep suggestions in a parented session
 agent-deck session set my-worker prompt-suggestions ""   # clear: follow profile, then [launch]
+```
+
+`state` sets a driver's row state: what a conductor loop or script says about the session, as one JSON object. `symbol` (one character, 1–2 cells) replaces the row's status icon, so a row shows one symbol; `attention` is `needs-you`, `moving` or `quiet` and picks the symbol's colour (attention colour, running colour, idle colour); `word` (at most 24 cells) and `role` (at most 16) are optional and trail the title dimly. A folded parent row counts `needs-you` states in its subtree, with the deck's own question, permission and error states. An empty value (or `null`, `{}`) clears it, and the row goes back to the deck's own status. Unknown keys are refused. Applies live; `list --json` and `session show --json` report it as `state` (absent when unset). agent-deck never reads state from a title.
+
+The documented symbols, one meaning each (the deck shows any single symbol a driver sends):
+
+| attention | symbol | meaning |
+|-----------|--------|---------|
+| `needs-you` | `?` | asks you |
+| `needs-you` | `▲` | your approval |
+| `needs-you` | `✖` | error |
+| `needs-you` | `◐` | needs your read |
+| `moving` | `●` | working |
+| `moving` | `⇡` | landing |
+| `quiet` | `○` | idle |
+| `quiet` | `■` | stopped |
+
+```bash
+agent-deck session set worker state '{"symbol":"▲","attention":"needs-you","word":"your approval","role":"review"}'
+agent-deck session set worker state '{"symbol":"●","attention":"moving","word":"working"}'
+agent-deck session set worker state ''      # clear: the deck's own status again
 ```
 
 `wait-timeout` sets the session's wait timer (Claude sessions): after a numbered question whose `(Recommended)` option is under the cursor has waited this long with nobody attached, agent-deck takes that option. It never answers permission, trust, login or security prompts, or a question about a destructive action. A Go duration of at least `1m`; `off` (or `0`) disables it for this session; an empty value falls back to `[sessions] wait_timeout` (default off). Applies live. See `config-reference.md` ("Wait timer").

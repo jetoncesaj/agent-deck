@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -255,6 +257,154 @@ type sessionRenderState struct {
 	// askKind is the kind of the session's open "asks you" (session ask:
 	// decision, pick, approval, fix); empty when it asks the person nothing.
 	askKind string
+	// accountDefault is true when [display] hide_default_account_badge is on
+	// and the stored slot is where the session would run anyway
+	// (session.AccountSlotIsDefault), so the row leaves the badge off.
+	accountDefault bool
+	// rowState is the driver-set row state (`session set <id> state`), nil
+	// when unset: its symbol replaces the status icon, its word and role
+	// trail the title, its attention level picks the colour.
+	rowState *session.RowState
+	// conductorMark is true for a conductor row (◆): the session carries the
+	// conductor flag, or it is a direct child of a flagged conductor with
+	// sub-sessions of its own. Read from metadata, never from the title.
+	conductorMark bool
+	// item is the session's tracker item ref (`session set <id> item`).
+	item string
+	// groupTitle is the row's title inside its group when every session in
+	// the group with an item shares one item prefix ("PROJ-"): the item's
+	// number, then the title without its leading ref, slug dashes shown as
+	// spaces ("507 one fresh picture"). Empty means show the title as is.
+	// Display only: the stored title, search and every surface outside the
+	// grouped list keep the full ref.
+	groupTitle string
+}
+
+// itemRefPrefixNumber splits an item ref into its prefix (the text up to and
+// including the last '-' before a trailing number) and the number:
+// "PROJ-507" is ("PROJ-", "507"). ok is false for a ref with no such shape
+// (a URL, a bare word).
+func itemRefPrefixNumber(ref string) (prefix, number string, ok bool) {
+	i := strings.LastIndexByte(ref, '-')
+	if i <= 0 || i == len(ref)-1 {
+		return "", "", false
+	}
+	for _, r := range ref[i+1:] {
+		if r < '0' || r > '9' {
+			return "", "", false
+		}
+	}
+	return ref[:i+1], ref[i+1:], true
+}
+
+// groupItemTitle is the in-group title of a session whose item is ref: the
+// number, then the title with a leading ref (any case, followed by a word
+// boundary) stripped and the remaining slug's dashes shown as spaces. A title
+// that does not start with the ref follows the number unchanged.
+func groupItemTitle(title, ref, number string) string {
+	name := title
+	if len(title) >= len(ref) && strings.EqualFold(title[:len(ref)], ref) {
+		rest := title[len(ref):]
+		if r, _ := utf8.DecodeRuneInString(rest); rest == "" || !(unicode.IsLetter(r) || unicode.IsDigit(r)) {
+			name = strings.ReplaceAll(strings.TrimLeft(rest, " -:·"), "-", " ")
+		}
+	}
+	if name = strings.TrimSpace(name); name == "" {
+		return number
+	}
+	return number + " " + name
+}
+
+// setGroupItemTitles fills groupTitle for every session whose group shares
+// one item prefix across all its sessions that have an item. A group with
+// mixed prefixes, or an item without a number, keeps full titles.
+func setGroupItemTitles(snap map[string]sessionRenderState, instances []*session.Instance) {
+	prefixes := make(map[string]string) // group path → shared prefix, "" once mixed
+	for _, inst := range instances {
+		if inst == nil {
+			continue
+		}
+		ref := snap[inst.ID].item
+		if ref == "" {
+			continue
+		}
+		prefix, _, ok := itemRefPrefixNumber(ref)
+		seen, known := prefixes[inst.GroupPath]
+		switch {
+		case !ok:
+			prefixes[inst.GroupPath] = ""
+		case !known:
+			prefixes[inst.GroupPath] = prefix
+		case seen != prefix:
+			prefixes[inst.GroupPath] = ""
+		}
+	}
+	for _, inst := range instances {
+		if inst == nil || prefixes[inst.GroupPath] == "" {
+			continue
+		}
+		state := snap[inst.ID]
+		if state.item == "" {
+			continue
+		}
+		_, number, _ := itemRefPrefixNumber(state.item)
+		state.groupTitle = groupItemTitle(state.title, state.item, number)
+		snap[inst.ID] = state
+	}
+}
+
+// needsYou reports whether the session needs the person: a driver state at
+// attention needs-you, or the deck's own signals (an open ask, an open
+// question or permission menu, an error). A folded parent row rolls these up
+// from its subtree.
+func (s sessionRenderState) needsYou() bool {
+	if s.archived {
+		return false
+	}
+	if s.rowState != nil && s.rowState.Attention == session.AttentionNeedsYou {
+		return true
+	}
+	return s.askKind != "" || s.status == session.StatusError ||
+		s.substate == session.SubstateInteractiveMenu
+}
+
+// moving reports whether the session is under way: a driver state at
+// attention moving or, with no driver state, the deck's running/starting.
+func (s sessionRenderState) moving() bool {
+	if s.archived {
+		return false
+	}
+	if s.rowState != nil {
+		return s.rowState.Attention == session.AttentionMoving
+	}
+	return s.status == session.StatusRunning || s.status == session.StatusStarting
+}
+
+// subtitleRepeatsTitle reports whether every word of a pane or task
+// subtitle already appears in the row title, ignoring case, punctuation and
+// glyphs. Claude shows the name it was launched with (--name) as its pane
+// title, so once a driver renames the session the pane title is a stale
+// copy of the title ("ONAZA-1 layer 4" under "ONAZA-1 working · layer 4");
+// the row drops it rather than say the same thing twice.
+func subtitleRepeatsTitle(subtitle, title string) bool {
+	if subtitle == "" {
+		return false
+	}
+	split := func(s string) []string {
+		return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+			return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+		})
+	}
+	titleWords := make(map[string]bool)
+	for _, w := range split(title) {
+		titleWords[w] = true
+	}
+	for _, w := range split(subtitle) {
+		if !titleWords[w] {
+			return false
+		}
+	}
+	return true
 }
 
 // shouldPersistAutoNameDesc decides whether the background status loop should
@@ -297,6 +447,9 @@ func sessionDisplayLabels(inst *session.Instance, paneTitle string) (title, subt
 	if inst.GetAutoName() && subtitle == "" {
 		subtitle = cleanPaneTitle(inst.GetAutoNameDescription())
 	}
+	if subtitleRepeatsTitle(subtitle, title) {
+		subtitle = ""
+	}
 	return title, subtitle
 }
 
@@ -308,6 +461,9 @@ func sessionDisplayLabelsFromState(state sessionRenderState) (title, subtitle st
 	subtitle = state.paneTitle
 	if state.autoName && subtitle == "" {
 		subtitle = cleanPaneTitle(state.autoNameDesc)
+	}
+	if subtitleRepeatsTitle(subtitle, title) {
+		subtitle = ""
 	}
 	return title, subtitle
 }
@@ -399,6 +555,21 @@ func (h *Home) refreshSessionRenderSnapshot(instances []*session.Instance) {
 
 	snap := make(map[string]sessionRenderState, len(instances))
 	asks := session.OpenAsks() // one directory read for the whole list
+	cfg, _ := session.LoadUserConfig()
+	hideDefaultAccount := cfg != nil && cfg.Display.HideDefaultAccountBadge
+	// Parent links for the conductor mark and the account default: who is
+	// whose parent, and who has live (unarchived) sub-sessions.
+	byID := make(map[string]*session.Instance, len(instances))
+	hasChildren := make(map[string]bool)
+	for _, inst := range instances {
+		if inst == nil {
+			continue
+		}
+		byID[inst.ID] = inst
+		if inst.ParentSessionID != "" && !inst.IsArchived() {
+			hasChildren[inst.ParentSessionID] = true
+		}
+	}
 	for _, inst := range instances {
 		if inst == nil {
 			continue
@@ -420,6 +591,15 @@ func (h *Home) refreshSessionRenderSnapshot(instances []*session.Instance) {
 		}
 		if a := asks[inst.ID]; a != nil {
 			state.askKind = a.Kind
+		}
+		parent := byID[inst.ParentSessionID]
+		state.conductorMark = inst.IsConductor ||
+			(parent != nil && parent.IsConductor && hasChildren[inst.ID])
+		state.rowState = inst.RowState()
+		state.item = inst.ItemRef()
+		if hideDefaultAccount {
+			state.accountDefault = session.AccountSlotIsDefault(cfg, state.account, state.tool,
+				inst.GroupPath, inst.ResolveConductorNameThreadSafe(), parent)
 		}
 		// Look up pane title from the already-refreshed tmux cache.
 		// Only RefreshPaneInfoCache (called from backgroundStatusUpdate) keeps
@@ -448,6 +628,7 @@ func (h *Home) refreshSessionRenderSnapshot(instances []*session.Instance) {
 		}
 		snap[inst.ID] = state
 	}
+	setGroupItemTitles(snap, instances)
 	h.publishSessionRenderSnapshot(snap)
 }
 

@@ -191,6 +191,8 @@ type InstanceData struct {
 	Favorite bool `json:"favorite,omitempty"`
 	// ItemRef mirrors Instance.ItemRef() (tool_data extras zone, item_ref.go).
 	ItemRef string `json:"item_ref,omitempty"`
+	// RowState mirrors Instance.RowState() (tool_data extras zone, row_state.go).
+	RowState *RowState `json:"row_state,omitempty"`
 
 	// IdentityInjectionDisabled mirrors Instance.IdentityInjectionDisabled.
 	// Lives in the tool_data extras zone (identity_injection_persist.go).
@@ -1169,6 +1171,8 @@ func instanceToRow(inst *Instance) (*statedb.InstanceRow, error) {
 	toolData = WriteFavoriteToToolData(toolData, inst.Favorite, inst.favoriteCleared)
 	itemRef, itemRefCleared := inst.itemRefForSave()
 	toolData = WriteItemRefToToolData(toolData, itemRef, itemRefCleared)
+	rowState, rowStateCleared := inst.rowStateForSave()
+	toolData = WriteRowStateToToolData(toolData, rowState, rowStateCleared)
 	// #1821: subcommand_passthrough lives in the same extras zone — see
 	// Instance.SubcommandPassthrough's doc for why losing it on reload must
 	// never silently re-enable claude/codex account-routing treatment for a
@@ -1397,6 +1401,7 @@ func (s *Storage) LoadLite() ([]*InstanceData, []*GroupData, error) {
 			IdleTimeoutSecs:           ReadIdleTimeoutSecsFromToolData(r.ToolData),
 			Favorite:                  ReadFavoriteFromToolData(r.ToolData),
 			ItemRef:                   ReadItemRefFromToolData(r.ToolData),
+			RowState:                  ReadRowStateFromToolData(r.ToolData),
 			SubcommandPassthrough:     ReadSubcommandPassthroughFromToolData(r.ToolData),
 			TrackCommandExit:          readTrackCommandExitFromToolData(r.ToolData),
 			IdentityInjectionDisabled: ReadIdentityInjectionDisabledFromToolData(r.ToolData),
@@ -1547,6 +1552,7 @@ func (s *Storage) LoadWithGroupsSnapshot() ([]*Instance, []*GroupData, *statedb.
 			IdleTimeoutSecs:           ReadIdleTimeoutSecsFromToolData(r.ToolData),
 			Favorite:                  ReadFavoriteFromToolData(r.ToolData),
 			ItemRef:                   ReadItemRefFromToolData(r.ToolData),
+			RowState:                  ReadRowStateFromToolData(r.ToolData),
 			SubcommandPassthrough:     ReadSubcommandPassthroughFromToolData(r.ToolData),
 			TrackCommandExit:          readTrackCommandExitFromToolData(r.ToolData),
 			IdentityInjectionDisabled: ReadIdentityInjectionDisabledFromToolData(r.ToolData),
@@ -1870,6 +1876,7 @@ func (s *Storage) convertToInstances(data *StorageData) ([]*Instance, []*GroupDa
 			IdleTimeoutSecs:              instData.IdleTimeoutSecs,
 			Favorite:                     instData.Favorite,
 			itemRef:                      instData.ItemRef,
+			rowState:                     instData.RowState,
 			DeepSeekTask:                 instData.DeepSeekTask,
 			HermesSessionID:              instData.HermesSessionID,
 			hermesBoundAt:                instData.HermesDetectedAt,

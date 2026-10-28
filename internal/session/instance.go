@@ -581,6 +581,11 @@ type Instance struct {
 	// (item_ref.go). itemRefCleared makes the save write an explicit clear.
 	itemRef        string
 	itemRefCleared bool
+	// rowState is the driver-set row state (`session set <id> state`),
+	// read via RowState(); guarded by mu. Persisted in the tool_data extras
+	// zone (row_state.go). rowStateCleared makes the save write a clear.
+	rowState        *RowState
+	rowStateCleared bool
 
 	// IsForkAwaitingStart signals that this instance was produced by a
 	// fork builder and must run a pre-built fork command verbatim on the

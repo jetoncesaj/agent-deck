@@ -149,6 +149,7 @@ func handleSessionShow(profile string, args []string) {
 		"parent_id":            parentID,
 		"parent_title":         parentTitle,
 		"item":                 inst.ItemRef(),
+		"state":                inst.RowState(),
 		"no_transition_notify": inst.NoTransitionNotify,
 		"title_locked":         inst.TitleLocked,
 		"tool":                 inst.Tool,
@@ -328,6 +329,9 @@ func handleSessionShow(profile string, args []string) {
 	if item := inst.ItemRef(); item != "" {
 		sb.WriteString(fmt.Sprintf("Item:    %s\n", item))
 	}
+	if st := inst.RowState(); st != nil {
+		sb.WriteString(fmt.Sprintf("State:   %s\n", session.RowStateString(st)))
+	}
 
 	sb.WriteString(fmt.Sprintf("Tool:    %s\n", inst.Tool))
 	sb.WriteString(fmt.Sprintf("Account: %s\n", strconv.Quote(inst.Account)))
@@ -480,6 +484,8 @@ func handleSessionSet(profile string, args []string) {
 		fmt.Println("  order              0-based position in the group (see `session show --json` .order); clamps to the end")
 		fmt.Println("  intended-switch    Mark the CURRENT account+model as switched on purpose (value = reason; 24h); '' clears")
 		fmt.Println("  item               Tracker item this session works on: any tracker's ref, free text, one line ('' clears; item in list/show --json)")
+		fmt.Println("  state              Driver-set row state, JSON {\"symbol\",\"attention\",\"word\",\"role\"}: the symbol replaces the row's")
+		fmt.Println("                     status icon, attention (needs-you, moving, quiet) picks its colour; '' clears (state in list/show --json)")
 		fmt.Println()
 		fmt.Println("Intended switches:")
 		fmt.Println("  `account`/`model` with --intended \"<reason>\" record the switch as intended until --intended-for")
@@ -498,6 +504,8 @@ func handleSessionSet(profile string, args []string) {
 		fmt.Println("  agent-deck session set my-project wrapper \"nvim +'terminal {command}'\"")
 		fmt.Println("  agent-deck session set my-project color \"#ff00aa\"     # truecolor hex tint")
 		fmt.Println("  agent-deck session set my-project color 203              # ANSI 256-palette pink")
+		fmt.Println("  agent-deck session set worker state '{\"symbol\":\"▲\",\"attention\":\"needs-you\",\"word\":\"your approval\",\"role\":\"review\"}'")
+		fmt.Println("  agent-deck session set worker state ''                   # back to the deck's own status")
 		fmt.Println("  agent-deck session set my-project color \"\"              # clear (opt-out)")
 		fmt.Println("  agent-deck session set my-project context-level primer")
 		fmt.Println("  agent-deck session set my-project context-level \"\"       # clear (inherit group/global)")
@@ -674,6 +682,9 @@ func handleSessionSet(profile string, args []string) {
 	}
 	if field == session.FieldItem {
 		value = inst.ItemRef()
+	}
+	if field == session.FieldState {
+		value = session.RowStateString(inst.RowState())
 	}
 	// Custom-tool conversation id: sticky MergeToolDataExtras preserves
 	// generic_session_id when a full Save omits the key. CLI does not always

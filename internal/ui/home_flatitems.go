@@ -175,6 +175,53 @@ func (h *Home) sessionChildCount(item session.Item) int {
 	return n
 }
 
+// foldRollup counts what a folded parent row hides: the sessions in its
+// subtree (its own group, the archive partition on screen, every depth) that
+// need the person (sessionRenderState.needsYou) and those still working.
+// States come from the render snapshot, so the row stays lock-light.
+func (h *Home) foldRollup(item session.Item, snapshot map[string]sessionRenderState) (needsYou, working int) {
+	if item.Session == nil || h.groupTree == nil {
+		return 0, 0
+	}
+	viewArchived := h.statusFilter == FilterModeArchived
+	children := make(map[string][]*session.Instance)
+	for _, group := range h.groupTree.GroupList {
+		if group == nil || group.Path != item.Path {
+			continue
+		}
+		for _, s := range group.Sessions {
+			if s != nil && s.IsSubSession() && s.IsArchived() == viewArchived {
+				children[s.ParentSessionID] = append(children[s.ParentSessionID], s)
+			}
+		}
+		break
+	}
+	seen := map[string]bool{item.Session.ID: true}
+	queue := []string{item.Session.ID}
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		for _, s := range children[id] {
+			if seen[s.ID] {
+				continue
+			}
+			seen[s.ID] = true
+			queue = append(queue, s.ID)
+			state, ok := snapshot[s.ID]
+			if !ok {
+				state = h.getSessionRenderState(s)
+			}
+			switch {
+			case state.needsYou():
+				needsYou++
+			case state.moving():
+				working++
+			}
+		}
+	}
+	return needsYou, working
+}
+
 // partitionParentFolds returns the parent folds (#2631) that apply to the
 // archive partition on screen. Flatten runs before the active/archived
 // partition, so a fold must only hide children when its parent row is drawn

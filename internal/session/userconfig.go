@@ -4321,6 +4321,14 @@ type DisplaySettings struct {
 	// its tool).
 	HideDefaultToolBadge bool `toml:"hide_default_tool_badge,omitempty"`
 
+	// HideDefaultAccountBadge drops the session row's account badge when the
+	// stored slot changes nothing: no slot (inherited), the
+	// [claude].default_account a new session in that group starts on, or a
+	// slot whose Claude config_dir is the one the session's conductor, group,
+	// profile or global config would pick without it. The preview still
+	// names the slot. Default: false (every row shows its account badge).
+	HideDefaultAccountBadge bool `toml:"hide_default_account_badge,omitempty"`
+
 	// IncludeCwdPrefix controls whether the terminal/pane title is prefixed
 	// with "[<cwd-basename>]" (e.g. "[my-project] feature work"). Default true
 	// preserves the historical format; set false to show only the session
