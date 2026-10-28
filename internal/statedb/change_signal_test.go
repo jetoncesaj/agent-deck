@@ -180,3 +180,28 @@ func TestSetAcknowledgedBumpsLastModified(t *testing.T) {
 			before, after)
 	}
 }
+
+// SetParentSessionID is the targeted write an archive uses to move a child
+// up a layer: it lands, and announces itself like SetArchived.
+func TestSetParentSessionIDBumpsLastModified(t *testing.T) {
+	db := newTestDB(t)
+	seedChangeSignalInstance(t, db, "relink-signal")
+	before := baselineLastModified(t, db)
+	if err := db.SetParentSessionID("relink-signal", "new-parent"); err != nil {
+		t.Fatalf("SetParentSessionID: %v", err)
+	}
+	after, err := db.LastModified()
+	if err != nil {
+		t.Fatalf("LastModified: %v", err)
+	}
+	if after <= before {
+		t.Errorf("SetParentSessionID did not bump last_modified: before=%d after=%d", before, after)
+	}
+	var got string
+	if err := db.DB().QueryRow("SELECT parent_session_id FROM instances WHERE id = ?", "relink-signal").Scan(&got); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if got != "new-parent" {
+		t.Fatalf("parent_session_id = %q, want new-parent", got)
+	}
+}

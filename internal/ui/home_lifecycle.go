@@ -187,6 +187,25 @@ func (h *Home) persistArchived(inst *session.Instance) error {
 	return db.SetArchived(inst.ID, inst.ArchivedAtThreadSafe())
 }
 
+// persistParentLinks writes each instance's parent link with a targeted
+// UPDATE, for the children an archive re-linked (the same concurrent-writer
+// reason persistArchived is targeted).
+func (h *Home) persistParentLinks(insts []*session.Instance) error {
+	if h.storage == nil || len(insts) == 0 {
+		return nil
+	}
+	db := h.storage.GetDB()
+	if db == nil {
+		return nil
+	}
+	for _, inst := range insts {
+		if err := db.SetParentSessionID(inst.ID, inst.ParentSessionID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // archiveSession stops a session and marks it archived.
 func (h *Home) archiveSession(inst *session.Instance) tea.Cmd {
 	// Snapshot the live Claude task description on the UI goroutine before the

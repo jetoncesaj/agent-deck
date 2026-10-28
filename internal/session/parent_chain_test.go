@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 // chainFixture: top -> mid -> leaf, top -> sib, and a loner.
@@ -156,5 +157,45 @@ func TestResolveMaxParentDepth(t *testing.T) {
 	}
 	if DefaultMaxParentDepth < 3 {
 		t.Fatalf("the default cap %d must allow at least three levels below a top-level session", DefaultMaxParentDepth)
+	}
+}
+
+func TestRelinkChildrenOfArchived_MovesLiveChildrenUpOneLayer(t *testing.T) {
+	top, mid, _, _, _, all := chainFixture()
+	top.ProjectPath = "/proj/top"
+	leaf2 := &Instance{ID: "leaf2", Title: "leaf2", ParentSessionID: "mid"}
+	done := &Instance{ID: "done", Title: "done", ParentSessionID: "mid"}
+	done.SetArchivedAtThreadSafe(time.Now())
+	grand := &Instance{ID: "grand", Title: "grand", ParentSessionID: "leaf"}
+	all = append(all, leaf2, done, grand)
+
+	mid.SetArchivedAtThreadSafe(time.Now())
+	moved := RelinkChildrenOfArchived(mid, all)
+	if chainIDs(moved) != "leaf,leaf2" {
+		t.Fatalf("moved %q, want the live direct children leaf,leaf2", chainIDs(moved))
+	}
+	for _, c := range moved {
+		if c.ParentSessionID != top.ID || c.ParentProjectPath != "/proj/top" {
+			t.Fatalf("%s now under %q (%q), want top", c.ID, c.ParentSessionID, c.ParentProjectPath)
+		}
+	}
+	if done.ParentSessionID != "mid" {
+		t.Fatal("an archived child keeps its link")
+	}
+	if grand.ParentSessionID != "leaf" || ParentDepth(grand, all) != 2 {
+		t.Fatalf("a grandchild moves with its parent: parent=%q depth=%d", grand.ParentSessionID, ParentDepth(grand, all))
+	}
+}
+
+func TestRelinkChildrenOfArchived_TopLevelKeepsItsChildren(t *testing.T) {
+	top, mid, _, sib, _, all := chainFixture()
+	if moved := RelinkChildrenOfArchived(top, all); len(moved) != 0 {
+		t.Fatalf("a top-level session's children moved: %v", chainIDs(moved))
+	}
+	if mid.ParentSessionID != "top" || sib.ParentSessionID != "top" {
+		t.Fatal("children of an archived top-level session keep their link")
+	}
+	if got := chainIDs(LiveChildren(top, all)); got != "mid,sib" {
+		t.Fatalf("LiveChildren(top) = %q", got)
 	}
 }

@@ -230,3 +230,51 @@ func ValidateParentLink(child, parent *Instance, instances []*Instance, maxDepth
 func CanTakeChild(parent *Instance, instances []*Instance, maxDepth int) bool {
 	return ValidateParentLink(nil, parent, instances, maxDepth) == nil
 }
+
+// RelinkChildrenOfArchived moves the live children of a session being
+// archived one layer up, under the archived session's own parent, so their
+// escalations keep reaching a session that reads them: an archived session
+// is stopped and never drains its inbox. The layer that went away is the
+// only one skipped; nothing else changes.
+//
+//   - Only direct children that are not archived themselves move (an
+//     archived child keeps its history). Their own subtrees move with them.
+//   - A top-level session being archived has no layer above it: its children
+//     keep their link, and the archive output names them so they can be
+//     re-linked by hand.
+//   - Unarchiving does not move them back (`session set-parent` does).
+//
+// The children are changed in memory and returned; the caller persists them.
+func RelinkChildrenOfArchived(archived *Instance, instances []*Instance) (relinked []*Instance) {
+	if archived == nil {
+		return nil
+	}
+	chain := ParentChain(archived, instances)
+	if len(chain) == 0 {
+		return nil
+	}
+	grandparent := chain[0]
+	for _, child := range Descendants(archived.ID, instances, 1) {
+		inst := child.Instance
+		if inst.IsArchived() {
+			continue
+		}
+		inst.SetParentWithPath(grandparent.ID, grandparent.ProjectPath)
+		relinked = append(relinked, inst)
+	}
+	return relinked
+}
+
+// LiveChildren returns the direct children of parent that are not archived.
+func LiveChildren(parent *Instance, instances []*Instance) []*Instance {
+	if parent == nil {
+		return nil
+	}
+	var out []*Instance
+	for _, d := range Descendants(parent.ID, instances, 1) {
+		if !d.Instance.IsArchived() {
+			out = append(out, d.Instance)
+		}
+	}
+	return out
+}

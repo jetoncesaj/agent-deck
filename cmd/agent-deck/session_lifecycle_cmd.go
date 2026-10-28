@@ -485,12 +485,82 @@ func handleSessionArchive(profile string, args []string) {
 		exitCLI(1)
 	}
 
-	out.Success(fmt.Sprintf("Archived session: %s", inst.Title), map[string]interface{}{
+	// Live children move up one layer, under this session's own parent, so
+	// their escalations keep reaching someone (session.RelinkChildrenOfArchived).
+	// A top-level session keeps its children linked; they are only named.
+	relinked, kept, relinkErr := relinkArchivedChildrenCLI(storage, inst, instances)
+	if relinkErr != nil {
+		out.Error(fmt.Sprintf("archived %s, but re-linking its children failed: %v", inst.Title, relinkErr), ErrCodeInvalidOperation)
+		exitCLI(1)
+	}
+	message := fmt.Sprintf("Archived session: %s", inst.Title)
+	if len(relinked) > 0 {
+		message += fmt.Sprintf("\nRe-linked %d child session(s) under %s: %s", len(relinked), relinked[0].parentTitle, joinChildTitles(relinked))
+	}
+	if len(kept) > 0 {
+		message += fmt.Sprintf("\n%d child session(s) still linked to the archived top-level session: %s", len(kept), joinChildTitles(kept))
+	}
+	data := map[string]interface{}{
 		"success":  true,
 		"id":       inst.ID,
 		"title":    inst.Title,
 		"archived": true,
-	})
+	}
+	if len(relinked) > 0 {
+		data["relinked_children"] = relinked
+	}
+	if len(kept) > 0 {
+		data["orphaned_children"] = kept
+	}
+	out.Success(message, data)
+}
+
+// archivedChildMove is one child of an archived session in the archive
+// output: where it was linked and where it is now.
+type archivedChildMove struct {
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	FromParentID string `json:"from_parent_id"`
+	ParentID     string `json:"parent_id"`
+	parentTitle  string
+}
+
+func joinChildTitles(moves []archivedChildMove) string {
+	titles := make([]string, 0, len(moves))
+	for _, m := range moves {
+		titles = append(titles, m.Title)
+	}
+	return strings.Join(titles, ", ")
+}
+
+// relinkArchivedChildrenCLI re-links the archived session's live children
+// to its parent with targeted writes (the archive itself is targeted for the
+// same concurrent-writer reason) and reports both the moved children and,
+// for a top-level session, the children left linked to it.
+func relinkArchivedChildrenCLI(storage *session.Storage, archived *session.Instance, instances []*session.Instance) (relinked, kept []archivedChildMove, err error) {
+	moved := session.RelinkChildrenOfArchived(archived, instances)
+	if len(moved) == 0 {
+		for _, c := range session.LiveChildren(archived, instances) {
+			kept = append(kept, archivedChildMove{ID: c.ID, Title: c.Title, FromParentID: archived.ID, ParentID: archived.ID})
+		}
+		return nil, kept, nil
+	}
+	db := storage.GetDB()
+	if db == nil {
+		return nil, nil, fmt.Errorf("state database unavailable")
+	}
+	newParent := findInstanceByID(instances, moved[0].ParentSessionID)
+	for _, c := range moved {
+		if err := db.SetParentSessionID(c.ID, c.ParentSessionID); err != nil {
+			return relinked, nil, err
+		}
+		m := archivedChildMove{ID: c.ID, Title: c.Title, FromParentID: archived.ID, ParentID: c.ParentSessionID}
+		if newParent != nil {
+			m.parentTitle = newParent.Title
+		}
+		relinked = append(relinked, m)
+	}
+	return relinked, nil, nil
 }
 
 // conditionalArchiveRequested reports whether either guard flag was passed,

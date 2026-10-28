@@ -3036,8 +3036,17 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		h.cachedStatusCounts.valid.Store(false)
 		h.invalidatePreviewCache(msg.sessionID)
+		// Live children move up one layer, under the archived session's own
+		// parent, before the tree is rebuilt (session.RelinkChildrenOfArchived).
+		var relinked []*session.Instance
+		inst := h.getInstanceByID(msg.sessionID)
+		if inst != nil {
+			h.instancesMu.Lock()
+			relinked = session.RelinkChildrenOfArchived(inst, h.instances)
+			h.instancesMu.Unlock()
+		}
 		h.rebuildFlatItems()
-		if inst := h.getInstanceByID(msg.sessionID); inst != nil {
+		if inst != nil {
 			// Persist via a targeted UPDATE, not saveInstances(): under concurrent
 			// writers the full-table save aborts on external-change and reloads,
 			// silently discarding the archive (archived_at reverts to 0).
@@ -3045,7 +3054,15 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 				h.setError(fmt.Errorf("failed to persist archive: %w", err))
 				return h, nil
 			}
-			h.setError(fmt.Errorf("archived '%s' (^ to view)", inst.Title))
+			if err := h.persistParentLinks(relinked); err != nil {
+				h.setError(fmt.Errorf("archived '%s', but re-linking its children failed: %w", inst.Title, err))
+				return h, nil
+			}
+			if len(relinked) > 0 {
+				h.setError(fmt.Errorf("archived '%s' (^ to view); %d child session(s) moved up a layer", inst.Title, len(relinked)))
+			} else {
+				h.setError(fmt.Errorf("archived '%s' (^ to view)", inst.Title))
+			}
 		}
 		return h, nil
 

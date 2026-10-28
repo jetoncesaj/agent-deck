@@ -1918,6 +1918,20 @@ func (s *StateDB) SetArchived(id string, at time.Time) error {
 	return s.touchWithRetry()
 }
 
+// SetParentSessionID re-points one row's parent link with a targeted UPDATE,
+// for the same reason SetArchived is targeted: it runs next to SetArchived
+// when an archived parent's children are re-linked to the grandparent, under
+// the same concurrent writers. Touch() so a running TUI reloads.
+func (s *StateDB) SetParentSessionID(id, parentID string) error {
+	if err := withBusyRetry(func() error {
+		_, err := s.db.Exec("UPDATE instances SET parent_session_id = ? WHERE id = ?", parentID, id)
+		return err
+	}); err != nil {
+		return err
+	}
+	return s.touchWithRetry()
+}
+
 // --- Heartbeat ---
 
 // RegisterInstance records this process as an active TUI instance.

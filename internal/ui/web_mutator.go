@@ -310,6 +310,9 @@ func (m *WebMutator) ArchiveSession(id string) error {
 	}
 	m.h.instancesMu.Lock()
 	inst.SetArchivedAtThreadSafe(time.Now().UTC())
+	// Live children move up one layer (session.RelinkChildrenOfArchived);
+	// persistAllInstances below saves them with the archive.
+	session.RelinkChildrenOfArchived(inst, m.h.instances)
 	m.h.instancesMu.Unlock()
 	return m.persistAllInstances()
 }
