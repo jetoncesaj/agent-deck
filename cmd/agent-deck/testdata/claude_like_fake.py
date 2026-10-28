@@ -10,6 +10,10 @@
 #     busy submit queues: queue-operation enqueue, composer shows 'Press up to edit queued messages',
 #     then after 1s remove(absorbed_mid_turn) + queued_command attachment (unchanged mailbox receipt);
 #     a control file with "hold_queue": true keeps queued input (and the hint) until the turn ends, like a long turn.
+#  5. ctrl+U deletes back to the start of the current line (at a line start it joins the previous line), like Claude;
+#     a draft with newlines renders as Claude does: continuation rows indented two columns inside the frame;
+#  6. an idle '/clear' starts a new conversation: no user record, the screen is wiped, and when the control file names
+#     a "clear_hook" argv it is run with a SessionStart(source=clear) payload on stdin, as Claude fires that hook.
 import datetime, json, os, re, select, sys, termios, time, uuid
 here = os.path.dirname(os.path.abspath(__file__))
 path = json.load(open(os.path.join(here, 'fake-running.json')))[os.path.realpath(os.getcwd())]
@@ -24,7 +28,7 @@ attrs[6][termios.VMIN], attrs[6][termios.VTIME] = 1, 0
 termios.tcsetattr(0, termios.TCSANOW, attrs)
 sys.stdout.write('\033[?2004h'); sys.stdout.flush()  # Claude enables bracketed paste
 phase, phase_id, draft, queued, pending, submits = None, None, '', [], [], 0
-hold_queue = False
+hold_queue, clear_hook, cleared = False, None, False
 started = time.monotonic()
 rendered_rows = 0
 def now(): return datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
@@ -38,17 +42,21 @@ def screen():
         head = ['Please run /login · API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired"}}', '']
     elif phase in ('busy', 'stream', 'booting'):
         head = ['⏺ Running the lanes.', '', '✽ Thundering… (%ds · ↓ 135 tokens)' % int(time.monotonic() - started), '']
+    elif cleared:
+        head = ['', '']
     else:
         head = ['⏺ All four steps ran.', '', '✻ Sautéed for 45s · done 10:44 AM', '']
     body = draft if draft else ('Press up to edit queued messages' if queued else '')
-    return head + [div, '❯ ' + body, div, '  ⏵⏵ bypass permissions on (shift+tab to cycle)']
+    rows = body.split('\n')
+    return head + [div, '❯ ' + rows[0]] + ['  ' + r for r in rows[1:]] + [div, '  ⏵⏵ bypass permissions on (shift+tab to cycle)']
 def render():
     global rendered_rows
     lines = screen()
     for i in range(max(rendered_rows, len(lines))):
         sys.stdout.write(f'\033[{i + 1};1H\033[2K' + (lines[i] if i < len(lines) else ''))
     row = lines.index(next(l for l in lines if l.startswith('❯ '))) + 1
-    sys.stdout.write(f'\033[{row};{3 + len(draft) + 1}H'); sys.stdout.flush()
+    last = draft.split('\n')
+    sys.stdout.write(f'\033[{row + len(last) - 1};{3 + len(last[-1]) + 1}H'); sys.stdout.flush()
     rendered_rows = len(lines)
 def receipt(source, records, kind):
     with open(mailbox + '.receipt.json', 'w') as out:
@@ -57,10 +65,22 @@ def receipt(source, records, kind):
 def request_id():
     try: return json.load(open(mailbox)).get('id')
     except (OSError, ValueError): return None
+def run_clear_hook():
+    global cleared
+    cleared = True
+    if not clear_hook: return
+    import subprocess
+    payload = json.dumps({'hook_event_name': 'SessionStart', 'source': 'clear', 'session_id': str(uuid.uuid4()), 'cwd': os.getcwd()})
+    try: subprocess.run(clear_hook, input=payload.encode(), timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError): pass
 def submit(text):
     global submits
     submits += 1
     rid = request_id()
+    if text.strip() == '/clear' and phase not in ('busy', 'stream'):
+        run_clear_hook(); return
+    global cleared
+    cleared = False
     if phase in ('busy', 'stream'):
         enq = {'type': 'queue-operation', 'operation': 'enqueue', 'timestamp': now(), 'content': text, 'sessionId': session_id}
         append(enq); queued.append(text); pending.append((time.monotonic() + 1.0, rid, enq))
@@ -85,10 +105,11 @@ def absorb():
         if rid and rid in enq['content']: receipt(rid, [enq, removed, att], 'queued')
         pending.remove(item); queued.remove(enq['content']); render()
 def poll_phase():
-    global phase, phase_id, hold_queue
+    global phase, phase_id, hold_queue, clear_hook
     try: c = json.load(open(control_path))
     except (OSError, ValueError): return
     hold_queue = bool(c.get('hold_queue'))
+    clear_hook = c.get('clear_hook')
     if (c.get('id'), c.get('phase')) != (phase_id, phase):
         phase_id, phase = c.get('id'), c.get('phase')
         # booting: a resumed Claude starting up, busy on screen with no new turn in the transcript
@@ -118,5 +139,8 @@ while True:
         elif ch == '\n': draft += '\n'; changed = True   # Claude: LF (ctrl+J) inserts a newline, it does not submit
         elif ch in '\x7f\b': draft = draft[:-1]; changed = True
         elif ch == '\x03': draft = ''; changed = True
+        elif ch == '\x15':  # ctrl+U: kill to line start; at a line start, the newline before it
+            nl = draft.rfind('\n')
+            draft = draft[:-1] if draft.endswith('\n') else draft[:nl + 1]; changed = True
         elif ch >= ' ': draft += ch; changed = True
     if changed: render()
