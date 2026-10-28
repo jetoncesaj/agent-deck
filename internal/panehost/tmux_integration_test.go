@@ -335,3 +335,35 @@ func TestTmuxGotoSwitchesClickingClient(t *testing.T) {
 		return len(cs) == 1 && cs[0].Session == "other"
 	})
 }
+
+// Close slot 1 while slot 2 stays, reopen slot 1: it is back on top and the
+// column has its configured width again.
+func TestTmuxReopenSlot1AboveSlot2(t *testing.T) {
+	socket, run := testServer(t)
+	hp1 := openTestHost(t, socket, run, "exec sleep 600 # one", "", false)
+	hp2 := openTestHost(t, socket, run, "exec sleep 600 # two", "", false)
+	if hp1.Slot != 1 || hp2.Slot != 2 {
+		t.Fatalf("slots = %d, %d", hp1.Slot, hp2.Slot)
+	}
+	if _, err := Close(run, "agent", 1, 3*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	// Let the column drift, as a person dragging the border would.
+	if _, err := run("resize-pane", "-t", hp2.PaneID, "-x", "82"); err != nil {
+		t.Fatal(err)
+	}
+	re := openTestHost(t, socket, run, "exec sleep 600 # one", "", false)
+	if re.Slot != 1 {
+		t.Fatalf("reopened slot = %d", re.Slot)
+	}
+	waitFor(t, "slot 1 above slot 2 at the configured width", 3*time.Second, func() bool {
+		top1, _ := strconv.Atoi(display(t, run, re.PaneID, "#{pane_top}"))
+		top2, _ := strconv.Atoi(display(t, run, hp2.PaneID, "#{pane_top}"))
+		w, _ := strconv.Atoi(display(t, run, re.PaneID, "#{pane_width}"))
+		return top1 < top2 && w >= 55 && w <= 59
+	})
+	st, err := Inspect(run, "agent")
+	if err != nil || len(st.Panes) != 2 || st.Panes[0].PaneID != re.PaneID {
+		t.Fatalf("Inspect after reopen = %+v, %v", st.Panes, err)
+	}
+}

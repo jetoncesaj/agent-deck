@@ -287,3 +287,57 @@ func TestNavigatorWebRefusalIsNotRetriedOnTmux(t *testing.T) {
 		t.Fatal("a refused web goto fell back to switch-client")
 	}
 }
+
+// Reopening slot 1 while slot 2 is still open puts slot 1 back on top of
+// the column (split -b above slot 2) and gives the column the configured
+// width again, instead of stacking slot 1 under slot 2 at whatever width
+// the column drifted to.
+func TestOpenSlot1AboveRemainingSlot2(t *testing.T) {
+	// Window 160 wide; the agent pane %0 and slot 2 (%2) at 82 columns.
+	row := func(pane, pid, w, slot, cmd string) string {
+		return strings.Join([]string{"@1", pane, pid, w, "40", "0", "160", "0", "36%", "100", "30", "", slot, "0", "sess-1", cmd}, "|")
+	}
+	f := &fakeTmux{answers: map[string]string{
+		"list-panes":   row("%0", "10", "77", "", "") + "\n" + row("%2", "12", "82", "2", "two") + "\n",
+		"split-window": "%3|13\n",
+		"list-keys":    defaultMouseDown1Pane + "\n",
+	}}
+	hp, created, err := Open(f.run, OpenSpec{
+		TmuxSession: "agent", SessionID: "sess-1", Command: "one",
+		Layout:      LayoutSpec{Width: "36%"},
+		HostCommand: func(string, int) string { return "host" },
+	})
+	if err != nil || !created || hp.Slot != 1 || hp.PaneID != "%3" {
+		t.Fatalf("Open = %+v created=%v err=%v", hp, created, err)
+	}
+	sp := f.called("split-window")
+	if len(sp) != 1 {
+		t.Fatalf("split-window calls = %q", sp)
+	}
+	got := strings.Join(sp[0], " ")
+	if !strings.Contains(got, " -v ") || !strings.Contains(got, " -b ") || !strings.Contains(got, " -t %2 ") {
+		t.Fatalf("split = %q, want a vertical split above slot 2 (-v -b -t %%2)", got)
+	}
+	var resized bool
+	for _, c := range f.called("resize-pane") {
+		if strings.Join(c, " ") == "resize-pane -t %3 -x 36%" {
+			resized = true
+		}
+	}
+	if !resized {
+		t.Fatalf("column not set back to the configured width; resize-pane calls = %q", f.called("resize-pane"))
+	}
+
+	// Opening slot 2 below an open slot 1 stays a plain split below it.
+	f = &fakeTmux{answers: map[string]string{
+		"list-panes":   row("%0", "10", "100", "", "") + "\n" + row("%1", "11", "57", "1", "one") + "\n",
+		"split-window": "%4|14\n",
+		"list-keys":    defaultMouseDown1Pane + "\n",
+	}}
+	if _, _, err := Open(f.run, OpenSpec{TmuxSession: "agent", SessionID: "sess-1", Command: "two", HostCommand: func(string, int) string { return "host" }}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(f.called("split-window")[0], " "); strings.Contains(got, " -b ") || !strings.Contains(got, " -t %1 ") {
+		t.Fatalf("slot 2 split = %q, want below slot 1", got)
+	}
+}
