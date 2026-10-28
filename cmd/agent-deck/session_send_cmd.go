@@ -566,6 +566,14 @@ func handleSessionSend(profile string, args []string) {
 		turnQuery := session.TurnQuery{Path: turnPath, Prompt: message, Cursor: turnCursor, SessionID: rolloverID}
 		tun.retry.turnAdvanced = func() bool { return session.TurnAdvanced(turnQuery) }
 	}
+	// /clear starts no turn and wipes the screen, so none of the pane or
+	// transcript signals above can ever see it land, and the send used to
+	// end "dropped silently" (exit 1) although the /clear ran. Claude's
+	// SessionStart(source=clear) hook is the record that it ran: a new
+	// conversation id in this instance's rollover marker.
+	if session.IsClaudeCompatible(inst.Tool) && isClaudeClearCommand(message) {
+		tun.retry.turnAdvanced = clearRolloverProbe(inst.ID)
+	}
 	if acceptanceGuard != nil {
 		// Codex's counterpart: a new turn in the exact rollout past the
 		// acceptance fence, the evidence the accepted-turn receipt rests on.
@@ -633,6 +641,7 @@ func handleSessionSend(profile string, args []string) {
 			acceptanceGuard.Release()
 		}
 		telemetry.ErrorOccurred(telemetry.AreaSend, telemetry.ErrKindOf(sendErr), inst.Tool)
+		warnUnrestoredDraft(sendRes)
 		extra := sendRes.jsonFields()
 		extra["session_id"] = inst.ID
 		extra["session_title"] = inst.Title
@@ -690,11 +699,7 @@ func handleSessionSend(profile string, args []string) {
 	// also in saved_draft in --json) so the operator can recover it rather
 	// than discovering a silent loss. draft_restore_failed never blocks the
 	// send: the automated message did go through.
-	if sendRes.draftSaved != "" && sendRes.draftRestoreFailed {
-		fmt.Fprintf(os.Stderr,
-			"Warning: cleared the operator draft to deliver this message but could not restore it. Recover it from: %s\n",
-			sendRes.draftSaved)
-	}
+	warnUnrestoredDraft(sendRes)
 
 	sendData := sendSuccessData(inst, message, sendRes, *wait)
 	sendData["tagged"] = tagged
@@ -1047,6 +1052,34 @@ func awaitClaudeReply(q session.TurnQuery, deadline time.Time, turn func(session
 	return resp, finalStatus, nil, nil, responseErr
 }
 
+// isClaudeClearCommand reports whether message is Claude Code's /clear (or
+// its aliases /reset and /new), which replaces the conversation instead of
+// starting a turn.
+func isClaudeClearCommand(message string) bool {
+	fields := strings.Fields(message)
+	if len(fields) == 0 {
+		return false
+	}
+	switch strings.ToLower(fields[0]) {
+	case "/clear", "/reset", "/new":
+		return true
+	}
+	return false
+}
+
+// clearRolloverProbe returns the verification loop's submission signal for a
+// /clear sent to instanceID: true once the instance's rollover marker names a
+// conversation, declared by SessionStart(source=clear), other than the one it
+// named before the send. Hook-less sessions never write the marker and keep
+// the pane-based verdict.
+func clearRolloverProbe(instanceID string) func() bool {
+	before, _ := session.ClaudeRolloverMarker(instanceID)
+	return func() bool {
+		id, source := session.ClaudeRolloverMarker(instanceID)
+		return id != "" && id != before && source == "clear"
+	}
+}
+
 // sendTracksTurn reports whether a send reads its own turn record out of the
 // Claude transcript: as the verification loop's authoritative submission
 // signal, and (with --wait/--stream) as the reply binding (PR #2043).
@@ -1265,8 +1298,8 @@ type sendDeliveryResult struct {
 	// draftSaved is the operator draft that was cleared from the composer to
 	// make way for the automated send (empty when no clear was needed).
 	draftSaved string
-	// draftCleared reports whether the guard confirmed the composer emptied
-	// after Ctrl+C.
+	// draftCleared reports whether the draft was moved aside and the
+	// composer confirmed empty (Ctrl+U, send.ClearClaudeComposer).
 	draftCleared bool
 	// draftRestored reports whether the saved operator draft was typed back
 	// (without Enter) after the automated delivery.
@@ -1381,6 +1414,14 @@ type sendExecTuning struct {
 	guardHold      time.Duration
 	guardPoll      time.Duration
 	guardClearWait time.Duration
+	// draftStableWait is the gap between the two reads that must agree
+	// before a draft is moved aside; draftClearSettle the wait after each
+	// Ctrl+U; draftRestoreWait how long the box may take to read empty
+	// before the draft is typed back, and to show it after. Zero uses the
+	// defaults in session_send_draft.go.
+	draftStableWait  time.Duration
+	draftClearSettle time.Duration
+	draftRestoreWait time.Duration
 	// preflightWait/preflightPoll bound the --no-wait composer-visibility
 	// barrier (issue #616).
 	preflightWait time.Duration
@@ -1434,16 +1475,16 @@ func noWaitSendTuning() sendExecTuning {
 //
 //  1. --no-wait only: capped preflight barrier until the Claude composer is
 //     visible, plus a short settle delay (issue #616).
-//  2. Composer-draft guard (issue #1409): hold while the composer shows a
-//     non-empty operator draft; at the bound, save the draft and clear the
-//     composer (Ctrl+C) so the automated message cannot merge with it.
+//  2. Composer draft: a stable, fully readable draft in an idle Claude
+//     composer is moved aside (verified Ctrl+U, moveDraftAside); otherwise
+//     the composer-draft guard (issue #1409) holds while the composer shows
+//     text and refuses at the bound, so the message never merges with it.
 //  3. Send + bounded submit verification (issues #876, #1413), classifying
 //     the outcome into a delivery status.
-//  4. Restore the saved operator draft (typed back without Enter) once the
-//     automated delivery is not stuck in the composer. When the automated
-//     message itself ends typed_not_submitted the draft is NOT retyped (it
-//     would merge into the stuck composer) — it is surfaced in the result
-//     instead so the caller can report it.
+//  4. Restore a moved draft (typed back without Enter) once the composer
+//     reads empty again, and confirm it is there. When the automated message
+//     is still in the composer (typed_not_submitted) the draft is NOT
+//     retyped (it would merge) — it is surfaced in the result and on stderr.
 //
 // Steps 1 and 4 are Claude-only: non-Claude tools gate readiness upstream.
 // Step 2 runs for every tool whose composer agent-deck can read: Claude, and
@@ -1473,6 +1514,21 @@ func executeSend(target sendRetryTarget, tool, message string, noWait bool, tun 
 		}
 	}
 
+	// A stable draft in a Claude composer is moved aside instead of
+	// blocking the send, and typed back after it (session_send_draft.go).
+	var moved *movedDraft
+	if claudeLike && !tun.requireInputPrompt {
+		m, err := moveDraftAside(target, tun)
+		if m != nil {
+			res.draftSaved, res.draftCleared = m.content.Text, err == nil
+		}
+		if err != nil {
+			res.delivery, res.draftRestoreFailed = deliveryComposerBlocked, true
+			return res, err
+		}
+		moved = m
+	}
+
 	if draftReader, guarded := composerDraftReaderFor(tool); guarded {
 		guard := send.GuardComposerDraft(target, send.ComposerGuardOptions{
 			HoldWait:     tun.guardHold,
@@ -1483,6 +1539,12 @@ func executeSend(target sendRetryTarget, tool, message string, noWait bool, tun 
 		})
 		res.held = guard.Held
 		if guard.Refused {
+			if moved != nil {
+				// Something new landed in the emptied box: put the
+				// draft back only if the box is empty again.
+				res.draftRestored = restoreMovedDraft(target, moved, tun)
+				res.draftRestoreFailed = !res.draftRestored
+			}
 			res.delivery = deliveryComposerBlocked
 			return res, fmt.Errorf("message not sent: composer is occupied or unreadable; existing draft preserved")
 		}
@@ -1508,6 +1570,10 @@ func executeSend(target sendRetryTarget, tool, message string, noWait bool, tun 
 	}
 	delivery, err := sendWithRetryTarget(target, message, skipClaudeDeliveryVerify(tool), tun.retry)
 	res.delivery = delivery
+	if moved != nil {
+		res.draftRestored = restoreMovedDraft(target, moved, tun)
+		res.draftRestoreFailed = !res.draftRestored
+	}
 	if delivery == deliveryDelivered {
 		res.note = send.UnconfirmedMessage(tool, verificationWindow(tun.retry.verificationChecks(claudeLike), tun.retry.checkDelay))
 	}

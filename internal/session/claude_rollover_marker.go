@@ -109,6 +109,15 @@ func readClaudeRolloverMarker(instanceID string) (sessionID, source string) {
 	return strings.TrimSpace(m.SessionID), m.Source
 }
 
+// ClaudeRolloverMarker returns the conversation id and source (clear or
+// compact) that this instance's own Claude process last declared through
+// SessionStart, or empty strings when there is no marker. A sender takes it
+// before typing /clear and again after: a new id with source clear is the
+// hook's record that the /clear ran.
+func ClaudeRolloverMarker(instanceID string) (sessionID, source string) {
+	return readClaudeRolloverMarker(instanceID)
+}
+
 // claudeRolloverDeclared reports whether this instance's own Claude process
 // declared candidate as the conversation that replaced the bound one via
 // SessionStart(clear|compact), returning that source.
