@@ -28,7 +28,7 @@ attrs[6][termios.VMIN], attrs[6][termios.VTIME] = 1, 0
 termios.tcsetattr(0, termios.TCSANOW, attrs)
 sys.stdout.write('\033[?2004h'); sys.stdout.flush()  # Claude enables bracketed paste
 phase, phase_id, draft, queued, pending, submits = None, None, '', [], [], 0
-hold_queue, clear_hook, cleared = False, None, False
+hold_queue, clear_hook, cleared, ctrl_c = False, None, False, 0
 started = time.monotonic()
 rendered_rows = 0
 def now(): return datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
@@ -121,7 +121,7 @@ def poll_phase():
                 'message': {'role': 'user', 'content': 'Owned fixture work before queued input.'}})
         render()
     tmp = state_path + '.tmp'
-    with open(tmp, 'w') as out: json.dump({'id': phase_id, 'phase': phase, 'busy_bytes': 0, 'submits': submits, 'draft': draft}, out)
+    with open(tmp, 'w') as out: json.dump({'id': phase_id, 'phase': phase, 'busy_bytes': 0, 'submits': submits, 'draft': draft, 'ctrl_c': ctrl_c}, out)
     os.replace(tmp, state_path)
 ESC_RE = re.compile(rb'\x1b\[[0-9;?]*[A-Za-z~]')
 render()
@@ -138,7 +138,7 @@ while True:
             draft = ''; changed = True
         elif ch == '\n': draft += '\n'; changed = True   # Claude: LF (ctrl+J) inserts a newline, it does not submit
         elif ch in '\x7f\b': draft = draft[:-1]; changed = True
-        elif ch == '\x03': draft = ''; changed = True
+        elif ch == '\x03': draft = ''; ctrl_c += 1; changed = True
         elif ch == '\x15':  # ctrl+U: kill to line start; at a line start, the newline before it
             nl = draft.rfind('\n')
             draft = draft[:-1] if draft.endswith('\n') else draft[:nl + 1]; changed = True
